@@ -20,6 +20,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:marty-supreme.runPong",
+    "onCommand:marty-supreme.runNinja",
     "onChatParticipant:marty.agent"
   ],
   "main": "./dist/extension.js",
@@ -57,6 +58,10 @@
       {
         "command": "marty-supreme.runSlotMachine",
         "title": "Marty Supreme: Run Slot Machine 1950s"
+      },
+      {
+        "command": "marty-supreme.runNinja",
+        "title": "Marty Supreme: Run Fruit Slayer Ninja"
       }
     ]
   },
