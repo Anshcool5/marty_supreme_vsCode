@@ -19,7 +19,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:marty-supreme.runPong"
+    "onCommand:marty-supreme.runPong",
+    "onCommand:marty-supreme.startAutoMonitor"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -43,6 +44,38 @@
       {
         "command": "marty-supreme.runPong",
         "title": "Marty Supreme: Run Pong 1950 (Hand Tracking)"
+      },
+      {
+        "command": "marty-supreme.stopPong",
+        "title": "Marty Supreme: Stop Pong"
+      },
+      {
+        "command": "marty-supreme.configureMonitorRegion",
+        "title": "Marty Supreme: Configure Agent Monitor Region"
+      },
+      {
+        "command": "marty-supreme.configureMonitorRegionInteractive",
+        "title": "Marty Supreme: Draw Agent Monitor Region On Screen"
+      },
+      {
+        "command": "marty-supreme.configureMonitorIcons",
+        "title": "Marty Supreme: Configure Agent Monitor Icons"
+      },
+      {
+        "command": "marty-supreme.configureMonitorAdvanced",
+        "title": "Marty Supreme: Configure Agent Monitor Advanced"
+      },
+      {
+        "command": "marty-supreme.startAutoMonitor",
+        "title": "Marty Supreme: Start Agent Icon Monitor"
+      },
+      {
+        "command": "marty-supreme.stopAutoMonitor",
+        "title": "Marty Supreme: Stop Agent Icon Monitor"
+      },
+      {
+        "command": "marty-supreme.captureMonitorSnippet",
+        "title": "Marty Supreme: Capture Monitor Detection Snippet (5s)"
       }
     ]
   },
