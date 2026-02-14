@@ -345,6 +345,8 @@ class MartySupremePong1950:
     PLAY_TOP = 128
     PLAY_BOTTOM_PAD = 32
     WIN_SCORE = 3
+    BALL_SPEED_BOOST_PER_HIT = 1.12
+    BALL_SPEED_MAX = 28.0
 
     BG_TOP = (16, 46, 37)
     BG_BOTTOM = (5, 17, 12)
@@ -363,13 +365,14 @@ class MartySupremePong1950:
         self.right_y = self.PLAY_TOP + ((play_bottom - self.PLAY_TOP - self.PADDLE_H) / 2)
         self.ball_x = self.WIDTH / 2
         self.ball_y = (self.PLAY_TOP + (play_bottom - self.BALL_SIZE)) / 2
-        self.ball_vx = 14.0
-        self.ball_vy = 5.6
+        self.ball_vx = 16.0
+        self.ball_vy = 6.4
         self.left_score = 0
         self.right_score = 0
         self.status = "Choose mode: Single Player or Double Player"
         self.match_over = False
         self.match_result = ""
+        self.winner_text = ""
         self.mode_menu_active = True
         self.audio_effects = None
         self.single_btn = pygame.Rect(self.WIDTH // 2 - 255, 300, 230, 76)
@@ -389,6 +392,7 @@ class MartySupremePong1950:
         self.right_score = 0
         self.match_over = False
         self.match_result = ""
+        self.winner_text = ""
         self._center_positions()
         self.status = (
             "Tracking LEFT + RIGHT hands..."
@@ -400,8 +404,8 @@ class MartySupremePong1950:
     def _reset_ball(self, direction: int) -> None:
         self.ball_x = self.WIDTH / 2
         self.ball_y = (self.PLAY_TOP + (self.HEIGHT - self.PLAY_BOTTOM_PAD - self.BALL_SIZE)) / 2
-        self.ball_vx = direction * (12.8 + random.random() * 3.8)
-        self.ball_vy = random.uniform(-6.8, 6.8)
+        self.ball_vx = direction * (14.8 + random.random() * 4.6)
+        self.ball_vy = random.uniform(-7.8, 7.8)
 
     def _finish_match(self, result: str) -> None:
         if self.match_over:
@@ -410,13 +414,36 @@ class MartySupremePong1950:
         self.match_over = True
         self.match_result = result
         if result == "win":
+            self.winner_text = "YOU WIN"
             self.status = "You won this set. Press R to play again or ESC to quit."
             if self.audio_effects is not None:
                 self.audio_effects.play_win()
-        else:
+        elif result == "lose":
+            self.winner_text = "YOU LOSE"
             self.status = "You lost this set. Press R to restart or ESC to quit."
             if self.audio_effects is not None:
                 self.audio_effects.play_lose()
+        elif result == "p1":
+            self.winner_text = "P1 WINS"
+            self.status = "P1 wins this set. Press R to play again or ESC to quit."
+            if self.audio_effects is not None:
+                self.audio_effects.play_win()
+        else:
+            self.winner_text = "P2 WINS"
+            self.status = "P2 wins this set. Press R to play again or ESC to quit."
+            if self.audio_effects is not None:
+                self.audio_effects.play_lose()
+
+    def _boost_ball_speed(self) -> None:
+        speed = float((self.ball_vx * self.ball_vx + self.ball_vy * self.ball_vy) ** 0.5)
+        if speed <= 0.0001:
+            return
+        target_speed = min(self.BALL_SPEED_MAX, speed * self.BALL_SPEED_BOOST_PER_HIT)
+        if target_speed <= speed:
+            return
+        scale = target_speed / speed
+        self.ball_vx *= scale
+        self.ball_vy *= scale
 
     def _update_logic(self) -> None:
         if self.match_over:
@@ -471,9 +498,10 @@ class MartySupremePong1950:
             and self.ball_y <= self.left_y + self.PADDLE_H
         ):
             self.ball_x = left_paddle_x + self.PADDLE_W
-            self.ball_vx = abs(self.ball_vx) + 0.18
+            self.ball_vx = abs(self.ball_vx)
             offset = (self.ball_y - (self.left_y + self.PADDLE_H / 2)) / (self.PADDLE_H / 2)
-            self.ball_vy = offset * 4.0
+            self.ball_vy = offset * 5.4
+            self._boost_ball_speed()
 
         right_paddle_x = self.WIDTH - self.MARGIN - self.PADDLE_W
         if (
@@ -482,21 +510,22 @@ class MartySupremePong1950:
             and self.ball_y <= self.right_y + self.PADDLE_H
         ):
             self.ball_x = right_paddle_x - self.BALL_SIZE
-            self.ball_vx = -abs(self.ball_vx) - 0.18
+            self.ball_vx = -abs(self.ball_vx)
             offset = (self.ball_y - (self.right_y + self.PADDLE_H / 2)) / (self.PADDLE_H / 2)
-            self.ball_vy = offset * 4.0
+            self.ball_vy = offset * 5.4
+            self._boost_ball_speed()
 
         if self.ball_x < -20:
             self.right_score += 1
             if self.right_score >= self.WIN_SCORE:
-                self._finish_match("lose")
+                self._finish_match("p2" if self.two_player else "lose")
             else:
                 self._reset_ball(direction=1)
 
         if self.ball_x > self.WIDTH + 20:
             self.left_score += 1
             if self.left_score >= self.WIN_SCORE:
-                self._finish_match("win")
+                self._finish_match("p1" if self.two_player else "win")
             else:
                 self._reset_ball(direction=-1)
 
@@ -568,10 +597,7 @@ class MartySupremePong1950:
             banner = pygame.Rect(170, 272, self.WIDTH - 340, 110)
             pygame.draw.rect(screen, (25, 73, 55), banner, border_radius=10)
             pygame.draw.rect(screen, self.GOLD, banner, width=2, border_radius=10)
-            if self.match_result == "win":
-                title = small_font.render("VICTORY", True, self.IVORY)
-            else:
-                title = small_font.render("DEFEAT", True, self.IVORY)
+            title = small_font.render(self.winner_text or "SET OVER", True, self.IVORY)
             subtitle = small_font.render("Press R to restart set", True, self.IVORY)
             screen.blit(title, (banner.centerx - title.get_width() // 2, banner.y + 26))
             screen.blit(subtitle, (banner.centerx - subtitle.get_width() // 2, banner.y + 58))
