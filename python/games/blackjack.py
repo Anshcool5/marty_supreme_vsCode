@@ -719,62 +719,81 @@ def penalty_force_push_env() -> Tuple[bool, str]:
         has_stash = "No local changes to save" not in stash_result.stdout
 
         # Switch to main branch
-        subprocess.run(
+        result = subprocess.run(
             ["git", "checkout", "main"],
             cwd=repo_root,
             capture_output=True,
-            check=True,
+            text=True,
             timeout=10
         )
+        if result.returncode != 0:
+            print(f"CHECKOUT FAILED: {result.stderr}", file=sys.stderr)
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
 
         # Write .env content on main branch
         with open(env_path, 'w', encoding='utf-8') as f:
             f.write(env_content)
 
         # Git add .env (force add even if in .gitignore)
-        subprocess.run(
+        result = subprocess.run(
             ["git", "add", "--force", ".env"],
             cwd=repo_root,
             capture_output=True,
-            check=True,
+            text=True,
             timeout=10
         )
+        if result.returncode != 0:
+            print(f"GIT ADD FAILED: {result.stderr}", file=sys.stderr)
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
 
-        # Commit
-        subprocess.run(
-            ["git", "commit", "-m", "HARDCORE PENALTY: Force committing .env"],
+        # Commit (allow empty in case no changes)
+        result = subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "HARDCORE PENALTY: Force committing .env"],
             cwd=repo_root,
             capture_output=True,
-            check=True,
+            text=True,
             timeout=10
         )
+        if result.returncode != 0:
+            print(f"COMMIT FAILED: {result.stderr}", file=sys.stderr)
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
 
         # Force push main to origin/main
-        subprocess.run(
+        result = subprocess.run(
             ["git", "push", "origin", "main", "--force"],
             cwd=repo_root,
             capture_output=True,
-            check=True,
+            text=True,
             timeout=10
         )
+        if result.returncode != 0:
+            print(f"PUSH FAILED: {result.stderr}", file=sys.stderr)
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
 
         # Switch back to original branch
-        subprocess.run(
+        result = subprocess.run(
             ["git", "checkout", current_branch],
             cwd=repo_root,
             capture_output=True,
-            check=True,
+            text=True,
             timeout=10
         )
+        if result.returncode != 0:
+            print(f"CHECKOUT BACK FAILED: {result.stderr}", file=sys.stderr)
+            # Don't raise here - we already pushed, just warn
 
         # Restore stashed changes if we stashed anything
         if has_stash:
-            subprocess.run(
+            result = subprocess.run(
                 ["git", "stash", "pop"],
                 cwd=repo_root,
                 capture_output=True,
+                text=True,
                 timeout=10
             )
+            if result.returncode != 0:
+                print(f"STASH POP FAILED: {result.stderr}", file=sys.stderr)
+                # Don't raise here either
 
         msg = f"HARDCORE PENALTY: Force pushed .env to main"
         print(msg, file=sys.stderr)
