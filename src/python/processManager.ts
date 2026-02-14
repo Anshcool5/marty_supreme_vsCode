@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { spawn, ChildProcess } from 'child_process';
 import * as readline from 'readline';
+import * as fs from 'fs';
+import * as path from 'path';
 import { resolvePythonInterpreter } from './interpreter';
 
 export class PythonProcessManager {
@@ -16,6 +18,43 @@ export class PythonProcessManager {
    * Find Python executable in system
    */
   private async findPythonExecutable(): Promise<string> {
+    // Prefer the workspace venv interpreter so installed game deps (e.g. OpenCV) are available.
+    const venvCandidates = [
+      path.join(this.context.extensionPath, 'python', 'venv', 'bin', 'python'),
+      path.join(this.context.extensionPath, 'python', 'venv', 'Scripts', 'python.exe'),
+    ];
+    const pythonCommands: string[] = [];
+
+    for (const candidate of venvCandidates) {
+      if (fs.existsSync(candidate)) {
+        pythonCommands.push(candidate);
+      }
+    }
+
+    // Try common Python commands
+    pythonCommands.push('python3', 'python', 'py');
+
+    for (const cmd of pythonCommands) {
+      try {
+        // Test if command exists
+        const testProcess = spawn(cmd, ['--version']);
+        const result = await new Promise<boolean>((resolve) => {
+          testProcess.on('error', () => resolve(false));
+          testProcess.on('exit', (code) => resolve(code === 0));
+        });
+
+        if (result) {
+          this.outputChannel.appendLine(`Found Python: ${cmd}`);
+          return cmd;
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+
+    throw new Error(
+      'Python not found. Please install Python 3.8+ and ensure it is in your PATH.'
+    );
     return resolvePythonInterpreter(this.context, this.outputChannel);
   }
 

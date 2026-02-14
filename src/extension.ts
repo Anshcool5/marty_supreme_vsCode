@@ -503,6 +503,80 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  // Register Tetris game command
+  const tetrisGameCommand = vscode.commands.registerCommand(
+    'marty-supreme.runTetris',
+    async () => {
+      outputChannel.show();
+      outputChannel.appendLine('Starting Tetris 1926...');
+
+      try {
+        const pythonManager = new PythonProcessManager(context, outputChannel);
+
+        const gameScriptPath = path.join(
+          context.extensionPath,
+          'python',
+          'games',
+          'tetris.py'
+        );
+
+        const process = await pythonManager.spawn(gameScriptPath);
+
+        if (process) {
+          outputChannel.appendLine('Tetris 1926 started successfully!');
+          vscode.window.showInformationMessage('Marty Supreme: Tetris 1926 is running!');
+
+          process.on('exit', (code) => {
+            outputChannel.appendLine(`Tetris process exited with code ${code}`);
+            vscode.window.showInformationMessage('Tetris 1926 ended.');
+          });
+        }
+      } catch (error) {
+        const errorMsg =
+          error instanceof Error ? error.message : 'Unknown error occurred';
+        outputChannel.appendLine(`Error: ${errorMsg}`);
+        vscode.window.showErrorMessage(`Failed to start Tetris: ${errorMsg}`);
+      }
+    }
+  );
+
+  // Register Blackjack game command
+  const blackjackGameCommand = vscode.commands.registerCommand(
+    'marty-supreme.runBlackjack',
+    async () => {
+      outputChannel.show();
+      outputChannel.appendLine('Starting Blackjack 1940s...');
+
+      try {
+        const pythonManager = new PythonProcessManager(context, outputChannel);
+
+        const gameScriptPath = path.join(
+          context.extensionPath,
+          'python',
+          'games',
+          'blackjack.py'
+        );
+
+        const process = await pythonManager.spawn(gameScriptPath);
+
+        if (process) {
+          outputChannel.appendLine('Blackjack 1940s started successfully!');
+          vscode.window.showInformationMessage('Marty Supreme: Blackjack 1940s is running!');
+
+          process.on('exit', (code) => {
+            outputChannel.appendLine(`Blackjack process exited with code ${code}`);
+            vscode.window.showInformationMessage('Blackjack 1940s ended.');
+          });
+        }
+      } catch (error) {
+        const errorMsg =
+          error instanceof Error ? error.message : 'Unknown error occurred';
+        outputChannel.appendLine(`Error: ${errorMsg}`);
+        vscode.window.showErrorMessage(`Failed to start Blackjack: ${errorMsg}`);
+      }
+    }
+  );
+
   const startThinkingGameCommand = vscode.commands.registerCommand(
     'marty-supreme.startThinkingGame',
     async () => {
@@ -580,6 +654,8 @@ export function activate(context: vscode.ExtensionContext) {
   // Add commands to subscriptions
   context.subscriptions.push(helloCommand);
   context.subscriptions.push(exampleGameCommand);
+  context.subscriptions.push(tetrisGameCommand);
+  context.subscriptions.push(blackjackGameCommand);
   context.subscriptions.push(startThinkingGameCommand);
   context.subscriptions.push(startThinkingGameDebugCommand);
   context.subscriptions.push(stopThinkingGameCommand);
