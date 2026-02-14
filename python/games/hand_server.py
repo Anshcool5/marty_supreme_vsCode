@@ -46,6 +46,9 @@ class HandState:
     paddle_y: float = 0.5
     confidence: float = 0.0
     mode: str = "idle"
+    right_paddle_y: float = 0.5
+    right_confidence: float = 0.0
+    right_mode: str = "idle"
     ok: bool = True
     error: str = ""
 
@@ -57,6 +60,7 @@ class HandTracker:
         self._show_preview = show_preview
         self._smooth_x = 0.5
         self._smooth_y = 0.5
+        self._smooth_right_y = 0.5
         self._smooth_alpha = 0.22
         self._max_step = 0.09
         self._dead_zone = 0.004
@@ -102,6 +106,9 @@ class HandTracker:
             "paddleY": self.state.paddle_y,
             "confidence": self.state.confidence,
             "mode": self.state.mode,
+            "rightPaddleY": self.state.right_paddle_y,
+            "rightConfidence": self.state.right_confidence,
+            "rightMode": self.state.right_mode,
             "ok": self.state.ok,
             "error": self.state.error,
         }
@@ -142,9 +149,29 @@ class HandTracker:
             error="",
         )
 
+    def _set_detected_right(self, y_norm: float, confidence: float, mode: str) -> None:
+        y_norm = float(np.clip(y_norm, 0.0, 1.0))
+        dy = y_norm - self._smooth_right_y
+        if abs(dy) > self._max_step:
+            y_norm = self._smooth_right_y + np.sign(dy) * self._max_step
+
+        alpha = self._smooth_alpha if confidence >= 0.7 else max(0.12, self._smooth_alpha * 0.7)
+        self._smooth_right_y = (1.0 - alpha) * self._smooth_right_y + alpha * y_norm
+        self._update(
+            right_paddle_y=self._smooth_right_y,
+            right_confidence=confidence,
+            right_mode=mode,
+            ok=True,
+            error="",
+        )
+
     def _set_not_detected(self) -> None:
         next_conf = max(0.0, self.state.confidence - 0.08)
         self._update(confidence=next_conf, ok=True, error="")
+
+    def _set_not_detected_right(self) -> None:
+        next_conf = max(0.0, self.state.right_confidence - 0.08)
+        self._update(right_confidence=next_conf, ok=True, error="")
 
     def _is_finger_folded(self, lm, tip_idx: int, pip_idx: int) -> bool:
         return lm[tip_idx].y > lm[pip_idx].y
@@ -179,6 +206,15 @@ class HandTracker:
         thumb_down = lm[4].y > lm[3].y > lm[2].y
         return folded_four and thumb_down
 
+    def _gesture_target(self, landmarks, current_y: float) -> tuple[str, float]:
+        if self._is_thumbs_up(landmarks):
+            return "thumbs_up", max(0.0, current_y - 0.06)
+        if self._is_thumbs_down(landmarks):
+            return "thumbs_down", min(1.0, current_y + 0.06)
+        if self._is_fist(landmarks):
+            return "fist_hold", current_y
+        return "gesture_idle", current_y
+
     def step(self) -> bool:
         if not self._cap:
             self._update(ok=False, error="Camera not initialized", mode="error")
@@ -199,38 +235,31 @@ class HandTracker:
 
             if result.multi_hand_landmarks:
                 detection_found = True
-                mode = "mediapipe_left_palm_y"
-                left_idx = None
-                left_conf = 0.0
+                mode = "mediapipe_tracking"
+                left_candidate = None
+                right_candidate = None
 
+                handedness_map: dict[int, tuple[str, float]] = {}
                 if result.multi_handedness:
                     for idx, handedness in enumerate(result.multi_handedness):
                         classification = handedness.classification[0]
-                        if classification.label == "Left" and classification.score > left_conf:
-                            left_idx = idx
-                            left_conf = classification.score
+                        handedness_map[idx] = (classification.label, classification.score)
 
-                if left_idx is not None:
-                    hand_landmarks = result.multi_hand_landmarks[left_idx]
+                for idx, hand_landmarks in enumerate(result.multi_hand_landmarks):
+                    label, score = handedness_map.get(idx, ("Unknown", 0.5))
+                    if label == "Left":
+                        if left_candidate is None or score > left_candidate[2]:
+                            left_candidate = (idx, hand_landmarks, score)
+                    elif label == "Right":
+                        if right_candidate is None or score > right_candidate[2]:
+                            right_candidate = (idx, hand_landmarks, score)
+
+                if left_candidate is not None:
+                    _, hand_landmarks, left_conf = left_candidate
                     landmarks = hand_landmarks.landmark
                     confidence = max(0.65, min(0.99, left_conf if left_conf > 0 else 0.9))
-                    target_x = self._smooth_x
-
-                    if self._is_thumbs_up(landmarks):
-                        mode = "thumbs_up"
-                        target_y = max(0.0, self._smooth_y - 0.06)
-                    elif self._is_thumbs_down(landmarks):
-                        mode = "thumbs_down"
-                        target_y = min(1.0, self._smooth_y + 0.06)
-                    elif self._is_fist(landmarks):
-                        mode = "fist_hold"
-                        target_y = self._smooth_y
-                    else:
-                        mode = "gesture_idle"
-                        target_y = self._smooth_y
-
-                    self._set_detected(target_x, target_y, confidence=confidence, mode=mode)
-
+                    left_mode, left_target_y = self._gesture_target(landmarks, self._smooth_y)
+                    self._set_detected(self._smooth_x, left_target_y, confidence=confidence, mode=left_mode)
                     if self._show_preview and self._drawing:
                         self._drawing.draw_landmarks(
                             frame,
@@ -238,14 +267,37 @@ class HandTracker:
                             self._mp_hands.HAND_CONNECTIONS,
                         )
                 else:
-                    detection_found = False
                     self._set_not_detected()
-                    mode = "mediapipe_waiting_left_hand"
+
+                if right_candidate is not None:
+                    _, hand_landmarks, right_conf = right_candidate
+                    landmarks = hand_landmarks.landmark
+                    confidence = max(0.65, min(0.99, right_conf if right_conf > 0 else 0.9))
+                    right_mode, right_target_y = self._gesture_target(
+                        landmarks, self._smooth_right_y
+                    )
+                    self._set_detected_right(
+                        right_target_y, confidence=confidence, mode=right_mode
+                    )
+                    if self._show_preview and self._drawing:
+                        self._drawing.draw_landmarks(
+                            frame,
+                            hand_landmarks,
+                            self._mp_hands.HAND_CONNECTIONS,
+                        )
+                else:
+                    self._set_not_detected_right()
+
+                if left_candidate is None and right_candidate is None:
+                    detection_found = False
+                    mode = "mediapipe_waiting_hands"
             else:
                 self._set_not_detected()
+                self._set_not_detected_right()
                 mode = "mediapipe_no_hands"
         else:
             self._set_not_detected()
+            self._set_not_detected_right()
             mode = "mediapipe_missing"
             self._update(
                 ok=False,
@@ -260,7 +312,8 @@ class HandTracker:
             detection_flag = "TRACKING" if detection_found else "SEARCHING"
             overlay_text = (
                 f"{detection_flag} mode={mode} conf={snapshot['confidence']:.2f} "
-                f"y={snapshot['paddleY']:.2f}"
+                f"yL={snapshot['paddleY']:.2f} yR={snapshot['rightPaddleY']:.2f} "
+                f"mL={snapshot['mode']} mR={snapshot['rightMode']}"
             )
             cv2.putText(
                 frame,
@@ -293,6 +346,8 @@ class MartySupremePong1950:
     PLAY_TOP = 128
     PLAY_BOTTOM_PAD = 32
     WIN_SCORE = 3
+    BALL_SPEED_BOOST_PER_HIT = 1.12
+    BALL_SPEED_MAX = 28.0
 
     BG_TOP = (16, 46, 37)
     BG_BOTTOM = (5, 17, 12)
@@ -303,6 +358,7 @@ class MartySupremePong1950:
     def __init__(self, camera_index: int = 0, show_preview: bool = False):
         self.camera_index = camera_index
         self.show_preview = show_preview
+        self.two_player = False
         self.tracker = HandTracker(camera_index=camera_index, show_preview=show_preview)
 
         play_bottom = self.HEIGHT - self.PLAY_BOTTOM_PAD
@@ -310,21 +366,42 @@ class MartySupremePong1950:
         self.right_y = self.PLAY_TOP + ((play_bottom - self.PLAY_TOP - self.PADDLE_H) / 2)
         self.ball_x = self.WIDTH / 2
         self.ball_y = (self.PLAY_TOP + (play_bottom - self.BALL_SIZE)) / 2
-        self.ball_vx = 7.0
-        self.ball_vy = 2.8
+        self.ball_vx = 16.0
+        self.ball_vy = 6.4
         self.left_score = 0
         self.right_score = 0
-        self.status = "Tracking left hand..."
+        self.status = "Choose mode: Single Player or Double Player"
         self.match_over = False
         self.match_result = ""
+        self.winner_text = ""
+        self.mode_menu_active = True
         self.audio_effects = None
-        self.paddle_hit_sound = None
-        self.wall_bounce_sound = None
-        self.missed_shot_sound = None
-        self.pong_theme_sound = None
-        self.pong_boot_sound = None
-        self.music_channel = None
-        self.theme_started = False
+        self.single_btn = pygame.Rect(self.WIDTH // 2 - 255, 300, 230, 76)
+        self.double_btn = pygame.Rect(self.WIDTH // 2 + 25, 300, 230, 76)
+
+    def _center_positions(self) -> None:
+        play_bottom = self.HEIGHT - self.PLAY_BOTTOM_PAD
+        self.left_y = self.PLAY_TOP + ((play_bottom - self.PLAY_TOP - self.PADDLE_H) / 2)
+        self.right_y = self.PLAY_TOP + ((play_bottom - self.PLAY_TOP - self.PADDLE_H) / 2)
+        self.ball_x = self.WIDTH / 2
+        self.ball_y = (self.PLAY_TOP + (play_bottom - self.BALL_SIZE)) / 2
+
+    def _start_mode(self, two_player: bool) -> None:
+        self.two_player = two_player
+        self.mode_menu_active = False
+        self.left_score = 0
+        self.right_score = 0
+        self.match_over = False
+        self.match_result = ""
+        self.winner_text = ""
+        self._center_positions()
+        self.status = (
+            "Tracking LEFT + RIGHT hands..."
+            if self.two_player
+            else "Tracking left hand..."
+        )
+        self._start_music_sequence(start_with_boot=False)
+        self._reset_ball(direction=random.choice([-1, 1]))
 
     def _play_theme_sound(self, sound: "pygame.mixer.Sound | None") -> None:
         if sound is None:
@@ -364,29 +441,35 @@ class MartySupremePong1950:
             except pygame.error as err:
                 print(f"Warning: failed to load Pong theme sound ({filename}): {err}")
 
-        boot_path = os.path.normpath(
+        boot_dir = os.path.normpath(
             os.path.join(
                 os.path.dirname(__file__),
                 "..",
                 "assets",
                 "audio_effects",
                 "boot",
-                "matry_supreme.mp3",
             )
         )
-        if not os.path.exists(boot_path):
-            print(f"Warning: Pong boot sound missing: {boot_path}")
+        boot_candidates = ["marty_supreme.mp3", "matry_supreme.mp3"]
+        boot_path = None
+        for candidate in boot_candidates:
+            candidate_path = os.path.join(boot_dir, candidate)
+            if os.path.exists(candidate_path):
+                boot_path = candidate_path
+                break
+        if boot_path is None:
+            print(f"Warning: Pong boot sound missing in {boot_dir} (expected one of {boot_candidates})")
             return
         try:
             self.pong_boot_sound = pygame.mixer.Sound(boot_path)
             self.pong_boot_sound.set_volume(1.0)
         except pygame.error as err:
-            print(f"Warning: failed to load Pong boot sound (matry_supreme.mp3): {err}")
+            print(f"Warning: failed to load Pong boot sound ({os.path.basename(boot_path)}): {err}")
 
-    def _start_music_sequence(self) -> None:
+    def _start_music_sequence(self, start_with_boot: bool = False) -> None:
         if self.music_channel is None:
             return
-        if self.pong_boot_sound is not None:
+        if start_with_boot and self.pong_boot_sound is not None:
             try:
                 self.music_channel.play(self.pong_boot_sound)
                 self.theme_started = False
@@ -415,8 +498,8 @@ class MartySupremePong1950:
     def _reset_ball(self, direction: int) -> None:
         self.ball_x = self.WIDTH / 2
         self.ball_y = (self.PLAY_TOP + (self.HEIGHT - self.PLAY_BOTTOM_PAD - self.BALL_SIZE)) / 2
-        self.ball_vx = direction * (6.4 + random.random() * 1.9)
-        self.ball_vy = random.uniform(-3.4, 3.4)
+        self.ball_vx = direction * (14.8 + random.random() * 4.6)
+        self.ball_vy = random.uniform(-7.8, 7.8)
 
     def _finish_match(self, result: str) -> None:
         if self.match_over:
@@ -425,20 +508,43 @@ class MartySupremePong1950:
         self.match_over = True
         self.match_result = result
         if result == "win":
+            self.winner_text = "YOU WIN"
             self.status = "You won this set. Press R to play again or ESC to quit."
             if self.audio_effects is not None:
                 self.audio_effects.play_win()
-        else:
+        elif result == "lose":
+            self.winner_text = "YOU LOSE"
             self.status = "You lost this set. Press R to restart or ESC to quit."
             if self.audio_effects is not None:
                 self.audio_effects.play_lose()
+        elif result == "p1":
+            self.winner_text = "P1 WINS"
+            self.status = "P1 wins this set. Press R to play again or ESC to quit."
+            if self.audio_effects is not None:
+                self.audio_effects.play_win()
+        else:
+            self.winner_text = "P2 WINS"
+            self.status = "P2 wins this set. Press R to play again or ESC to quit."
+            if self.audio_effects is not None:
+                self.audio_effects.play_lose()
+
+    def _boost_ball_speed(self) -> None:
+        speed = float((self.ball_vx * self.ball_vx + self.ball_vy * self.ball_vy) ** 0.5)
+        if speed <= 0.0001:
+            return
+        target_speed = min(self.BALL_SPEED_MAX, speed * self.BALL_SPEED_BOOST_PER_HIT)
+        if target_speed <= speed:
+            return
+        scale = target_speed / speed
+        self.ball_vx *= scale
+        self.ball_vy *= scale
 
     def _update_logic(self) -> None:
         if self.match_over:
             return
 
         play_bottom = self.HEIGHT - self.PLAY_BOTTOM_PAD
-        move_speed = 8.6
+        move_speed = 12.4
         gesture = self.tracker.state.mode
         if gesture == "thumbs_up":
             self.left_y -= move_speed
@@ -448,14 +554,26 @@ class MartySupremePong1950:
             pass
         self.left_y = max(self.PLAY_TOP, min(play_bottom - self.PADDLE_H, self.left_y))
 
-        ai_center = self.right_y + self.PADDLE_H / 2
-        ball_center = self.ball_y + self.BALL_SIZE / 2
-        ai_speed = 5.5
-        if ball_center < ai_center - 8:
-            self.right_y -= ai_speed
-        elif ball_center > ai_center + 8:
-            self.right_y += ai_speed
-        self.right_y = max(self.PLAY_TOP, min(play_bottom - self.PADDLE_H, self.right_y))
+        if self.two_player:
+            right_gesture = self.tracker.state.right_mode
+            if right_gesture == "thumbs_up":
+                self.right_y -= move_speed
+            elif right_gesture == "thumbs_down":
+                self.right_y += move_speed
+            elif right_gesture == "fist_hold":
+                pass
+            self.right_y = max(
+                self.PLAY_TOP, min(play_bottom - self.PADDLE_H, self.right_y)
+            )
+        else:
+            ai_center = self.right_y + self.PADDLE_H / 2
+            ball_center = self.ball_y + self.BALL_SIZE / 2
+            ai_speed = 8.0
+            if ball_center < ai_center - 8:
+                self.right_y -= ai_speed
+            elif ball_center > ai_center + 8:
+                self.right_y += ai_speed
+            self.right_y = max(self.PLAY_TOP, min(play_bottom - self.PADDLE_H, self.right_y))
 
         self.ball_x += self.ball_vx
         self.ball_y += self.ball_vy
@@ -476,9 +594,10 @@ class MartySupremePong1950:
             and self.ball_y <= self.left_y + self.PADDLE_H
         ):
             self.ball_x = left_paddle_x + self.PADDLE_W
-            self.ball_vx = abs(self.ball_vx) + 0.18
+            self.ball_vx = abs(self.ball_vx)
             offset = (self.ball_y - (self.left_y + self.PADDLE_H / 2)) / (self.PADDLE_H / 2)
-            self.ball_vy = offset * 4.0
+            self.ball_vy = offset * 5.4
+            self._boost_ball_speed()
             self._play_theme_sound(self.paddle_hit_sound)
 
         right_paddle_x = self.WIDTH - self.MARGIN - self.PADDLE_W
@@ -488,16 +607,17 @@ class MartySupremePong1950:
             and self.ball_y <= self.right_y + self.PADDLE_H
         ):
             self.ball_x = right_paddle_x - self.BALL_SIZE
-            self.ball_vx = -abs(self.ball_vx) - 0.18
+            self.ball_vx = -abs(self.ball_vx)
             offset = (self.ball_y - (self.right_y + self.PADDLE_H / 2)) / (self.PADDLE_H / 2)
-            self.ball_vy = offset * 4.0
+            self.ball_vy = offset * 5.4
+            self._boost_ball_speed()
             self._play_theme_sound(self.paddle_hit_sound)
 
         if self.ball_x < -20:
             self.right_score += 1
             self._play_theme_sound(self.missed_shot_sound)
             if self.right_score >= self.WIN_SCORE:
-                self._finish_match("lose")
+                self._finish_match("p2" if self.two_player else "lose")
             else:
                 self._reset_ball(direction=1)
 
@@ -505,21 +625,35 @@ class MartySupremePong1950:
             self.left_score += 1
             self._play_theme_sound(self.missed_shot_sound)
             if self.left_score >= self.WIN_SCORE:
-                self._finish_match("win")
+                self._finish_match("p1" if self.two_player else "win")
             else:
                 self._reset_ball(direction=-1)
 
         if self.match_over:
             return
 
-        if self.tracker.state.confidence < 0.2:
+        if self.two_player and (
+            self.tracker.state.confidence < 0.2
+            or self.tracker.state.right_confidence < 0.2
+        ):
+            self.status = (
+                "Show LEFT and RIGHT hands: thumbs up/down move, fist holds"
+            )
+        elif not self.two_player and self.tracker.state.confidence < 0.2:
             self.status = "Show LEFT hand: thumbs up/down to move, fist to hold"
         else:
-            self.status = (
-                f"Gesture={self.tracker.state.mode} "
-                f"conf={self.tracker.state.confidence:.2f} "
-                "| thumbs up/down move, fist holds"
-            )
+            if self.two_player:
+                self.status = (
+                    f"L={self.tracker.state.mode}({self.tracker.state.confidence:.2f}) "
+                    f"R={self.tracker.state.right_mode}({self.tracker.state.right_confidence:.2f}) "
+                    "| thumbs up/down move, fist holds"
+                )
+            else:
+                self.status = (
+                    f"Gesture={self.tracker.state.mode} "
+                    f"conf={self.tracker.state.confidence:.2f} "
+                    "| thumbs up/down move, fist holds"
+                )
 
     def _draw(self, screen, fonts) -> None:
         title_font, text_font, small_font = fonts
@@ -563,13 +697,73 @@ class MartySupremePong1950:
             banner = pygame.Rect(170, 272, self.WIDTH - 340, 110)
             pygame.draw.rect(screen, (25, 73, 55), banner, border_radius=10)
             pygame.draw.rect(screen, self.GOLD, banner, width=2, border_radius=10)
-            if self.match_result == "win":
-                title = small_font.render("VICTORY", True, self.IVORY)
-            else:
-                title = small_font.render("DEFEAT", True, self.IVORY)
+            title = small_font.render(self.winner_text or "SET OVER", True, self.IVORY)
             subtitle = small_font.render("Press R to restart set", True, self.IVORY)
             screen.blit(title, (banner.centerx - title.get_width() // 2, banner.y + 26))
             screen.blit(subtitle, (banner.centerx - subtitle.get_width() // 2, banner.y + 58))
+
+    def _draw_mode_menu(self, screen, fonts) -> None:
+        title_font, _, small_font = fonts
+        mouse_pos = pygame.mouse.get_pos()
+
+        overlay = pygame.Surface((self.WIDTH, self.HEIGHT), pygame.SRCALPHA)
+        overlay.fill((6, 15, 11, 190))
+        screen.blit(overlay, (0, 0))
+
+        menu_panel = pygame.Rect(120, 190, self.WIDTH - 240, 260)
+        pygame.draw.rect(screen, (18, 61, 47), menu_panel, border_radius=12)
+        pygame.draw.rect(screen, self.GOLD, menu_panel, width=2, border_radius=12)
+
+        heading = title_font.render("SELECT GAME MODE", True, self.IVORY)
+        screen.blit(heading, (self.WIDTH // 2 - heading.get_width() // 2, 215))
+
+        hint = small_font.render("Press 1 / 2 or click a button", True, self.IVORY)
+        screen.blit(hint, (self.WIDTH // 2 - hint.get_width() // 2, 264))
+
+        single_hover = self.single_btn.collidepoint(mouse_pos)
+        double_hover = self.double_btn.collidepoint(mouse_pos)
+
+        single_fill = (39, 114, 86) if single_hover else (27, 84, 64)
+        double_fill = (74, 103, 46) if double_hover else (58, 80, 35)
+
+        pygame.draw.rect(screen, single_fill, self.single_btn, border_radius=10)
+        pygame.draw.rect(screen, self.GOLD, self.single_btn, width=2, border_radius=10)
+        pygame.draw.rect(screen, double_fill, self.double_btn, border_radius=10)
+        pygame.draw.rect(screen, self.GOLD, self.double_btn, width=2, border_radius=10)
+
+        single_label = small_font.render("1) SINGLE PLAYER", True, self.IVORY)
+        double_label = small_font.render("2) DOUBLE PLAYER", True, self.IVORY)
+        single_sub = small_font.render("Left hand vs AI", True, self.IVORY)
+        double_sub = small_font.render("Left hand vs Right hand", True, self.IVORY)
+
+        screen.blit(
+            single_label,
+            (
+                self.single_btn.centerx - single_label.get_width() // 2,
+                self.single_btn.y + 14,
+            ),
+        )
+        screen.blit(
+            single_sub,
+            (
+                self.single_btn.centerx - single_sub.get_width() // 2,
+                self.single_btn.y + 42,
+            ),
+        )
+        screen.blit(
+            double_label,
+            (
+                self.double_btn.centerx - double_label.get_width() // 2,
+                self.double_btn.y + 14,
+            ),
+        )
+        screen.blit(
+            double_sub,
+            (
+                self.double_btn.centerx - double_sub.get_width() // 2,
+                self.double_btn.y + 42,
+            ),
+        )
 
     def run(self) -> int:
         if not HAS_PYGAME:
@@ -599,10 +793,9 @@ class MartySupremePong1950:
             self.music_channel = pygame.mixer.Channel(1)
         except pygame.error:
             self.music_channel = None
-        self._start_music_sequence()
+        self._start_music_sequence(start_with_boot=True)
 
         running = True
-        self._reset_ball(direction=random.choice([-1, 1]))
         try:
             while running:
                 for event in pygame.event.get():
@@ -610,22 +803,34 @@ class MartySupremePong1950:
                         running = False
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                         running = False
+                    if self.mode_menu_active and event.type == pygame.KEYDOWN:
+                        if event.key in (pygame.K_1, pygame.K_KP1):
+                            self._start_mode(two_player=False)
+                        elif event.key in (pygame.K_2, pygame.K_KP2):
+                            self._start_mode(two_player=True)
+                    if (
+                        self.mode_menu_active
+                        and event.type == pygame.MOUSEBUTTONDOWN
+                        and event.button == 1
+                    ):
+                        if self.single_btn.collidepoint(event.pos):
+                            self._start_mode(two_player=False)
+                        elif self.double_btn.collidepoint(event.pos):
+                            self._start_mode(two_player=True)
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_r and self.match_over:
-                        self.left_score = 0
-                        self.right_score = 0
-                        self.match_over = False
-                        self.match_result = ""
-                        self.status = "Tracking left hand..."
-                        self._reset_ball(direction=random.choice([-1, 1]))
+                        self._start_mode(two_player=self.two_player)
 
                 should_continue = self.tracker.step()
                 if not should_continue:
                     running = False
                     break
 
-                self._update_logic()
-                self._update_music_sequence()
+                if not self.mode_menu_active:
+                    self._update_logic()
+                    self._update_music_sequence()
                 self._draw(screen, (title_font, text_font, small_font))
+                if self.mode_menu_active:
+                    self._draw_mode_menu(screen, (title_font, text_font, small_font))
                 pygame.display.flip()
                 clock.tick(60)
         finally:
