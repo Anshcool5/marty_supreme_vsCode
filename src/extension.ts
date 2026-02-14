@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { PythonProcessManager } from './python/processManager';
+import { resolvePythonInterpreter } from './python/interpreter';
 import * as path from 'path';
 import { ChildProcess, spawn } from 'child_process';
 import * as net from 'net';
@@ -97,7 +98,7 @@ class ThinkingPingPongController implements vscode.Disposable {
       return;
     }
 
-    const pythonBin = await this.findPythonBinary();
+    const pythonBin = await resolvePythonInterpreter(this.context, this.output);
     const scriptPath = path.join(this.context.extensionPath, 'python', 'games', 'hand_server.py');
     const args = [scriptPath, '--port', String(this.handServerPort)];
     if (this.debugPreviewEnabled) {
@@ -132,28 +133,6 @@ class ThinkingPingPongController implements vscode.Disposable {
     }
     this.pythonProcess.kill('SIGTERM');
     this.pythonProcess = undefined;
-  }
-
-  private async findPythonBinary(): Promise<string> {
-    const candidates = [
-      path.join(this.context.extensionPath, 'python', '.venv', 'bin', 'python'),
-      path.join(this.context.extensionPath, 'python', '.venv', 'bin', 'python3'),
-      'python3',
-      'python',
-    ];
-
-    for (const candidate of candidates) {
-      const available = await new Promise<boolean>((resolve) => {
-        const probe = spawn(candidate, ['--version']);
-        probe.on('error', () => resolve(false));
-        probe.on('exit', (code) => resolve(code === 0));
-      });
-      if (available) {
-        return candidate;
-      }
-    }
-
-    throw new Error('No usable Python interpreter found. Install Python 3.8+.');
   }
 
   private getWebviewHtml(): string {

@@ -38,7 +38,9 @@ class HandTracker:
         self._show_preview = show_preview
         self._smooth_x = 0.5
         self._smooth_y = 0.5
-        self._smooth_alpha = 0.18
+        self._smooth_alpha = 0.22
+        self._max_step = 0.09
+        self._dead_zone = 0.004
         self._cap = None
         self._hands = None
         self._drawing = None
@@ -87,11 +89,29 @@ class HandTracker:
         for key, value in kwargs.items():
             setattr(self.state, key, value)
 
+    def _stabilize_target(self, x_norm: float, y_norm: float) -> tuple[float, float]:
+        dx = x_norm - self._smooth_x
+        dy = y_norm - self._smooth_y
+        dist = float((dx * dx + dy * dy) ** 0.5)
+
+        if dist < self._dead_zone:
+            return self._smooth_x, self._smooth_y
+
+        if dist > self._max_step and dist > 0:
+            scale = self._max_step / dist
+            x_norm = self._smooth_x + (dx * scale)
+            y_norm = self._smooth_y + (dy * scale)
+
+        return x_norm, y_norm
+
     def _set_detected(self, x_norm: float, y_norm: float, confidence: float, mode: str) -> None:
         x_norm = float(np.clip(x_norm, 0.0, 1.0))
         y_norm = float(np.clip(y_norm, 0.0, 1.0))
-        self._smooth_x = (1.0 - self._smooth_alpha) * self._smooth_x + self._smooth_alpha * x_norm
-        self._smooth_y = (1.0 - self._smooth_alpha) * self._smooth_y + self._smooth_alpha * y_norm
+        x_norm, y_norm = self._stabilize_target(x_norm, y_norm)
+
+        alpha = self._smooth_alpha if confidence >= 0.7 else max(0.12, self._smooth_alpha * 0.7)
+        self._smooth_x = (1.0 - alpha) * self._smooth_x + alpha * x_norm
+        self._smooth_y = (1.0 - alpha) * self._smooth_y + alpha * y_norm
         self._update(
             paddle_x=self._smooth_x,
             paddle_y=self._smooth_y,
@@ -126,9 +146,23 @@ class HandTracker:
 
             if result.multi_hand_landmarks:
                 detection_found = True
-                mode = "mediapipe"
-                lm = result.multi_hand_landmarks[0].landmark[9]
-                self._set_detected(lm.x, lm.y, confidence=0.95, mode=mode)
+                mode = "mediapipe_finger"
+                landmarks = result.multi_hand_landmarks[0].landmark
+
+                # Finger-guided pointer: blend index tip with palm center for stable control.
+                index_tip = landmarks[8]
+                palm_ids = [0, 5, 9, 13, 17]
+                palm_x = sum(landmarks[i].x for i in palm_ids) / len(palm_ids)
+                palm_y = sum(landmarks[i].y for i in palm_ids) / len(palm_ids)
+
+                target_x = (0.7 * index_tip.x) + (0.3 * palm_x)
+                target_y = (0.7 * index_tip.y) + (0.3 * palm_y)
+
+                confidence = 0.95
+                if result.multi_handedness:
+                    confidence = max(0.65, min(0.99, result.multi_handedness[0].classification[0].score))
+
+                self._set_detected(target_x, target_y, confidence=confidence, mode=mode)
                 if self._show_preview and self._drawing:
                     self._drawing.draw_landmarks(
                         frame,
@@ -147,14 +181,32 @@ class HandTracker:
 
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
-                biggest = max(contours, key=cv2.contourArea)
-                area = cv2.contourArea(biggest)
-                if area > 1200:
-                    detection_found = True
-                    mode = "opencv"
-                    x, y, cw, ch = cv2.boundingRect(biggest)
+                prev_x = self._smooth_x * max(w, 1)
+                prev_y = self._smooth_y * max(h, 1)
+                best = None
+                best_score = -1.0
+
+                for contour in contours:
+                    area = cv2.contourArea(contour)
+                    if area < 900:
+                        continue
+
+                    x, y, cw, ch = cv2.boundingRect(contour)
                     center_x = x + (cw / 2.0)
                     center_y = y + (ch / 2.0)
+                    dist = float(((center_x - prev_x) ** 2 + (center_y - prev_y) ** 2) ** 0.5)
+
+                    # Penalize upper-frame blobs (commonly faces) and prefer continuity.
+                    upper_penalty = 0.3 if center_y < (h * 0.2) else 1.0
+                    score = (area / max(dist, 1.0)) * upper_penalty
+                    if score > best_score:
+                        best_score = score
+                        best = (x, y, cw, ch, center_x, center_y, area)
+
+                if best is not None:
+                    detection_found = True
+                    mode = "opencv"
+                    x, y, cw, ch, center_x, center_y, _ = best
                     x_norm = center_x / max(w, 1)
                     y_norm = center_y / max(h, 1)
                     self._set_detected(x_norm, y_norm, confidence=0.6, mode=mode)

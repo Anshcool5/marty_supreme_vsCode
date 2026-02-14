@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { spawn, ChildProcess } from 'child_process';
 import * as readline from 'readline';
+import { resolvePythonInterpreter } from './interpreter';
 
 export class PythonProcessManager {
   private processes: Map<string, ChildProcess> = new Map();
@@ -15,30 +16,7 @@ export class PythonProcessManager {
    * Find Python executable in system
    */
   private async findPythonExecutable(): Promise<string> {
-    // Try common Python commands
-    const pythonCommands = ['python3', 'python', 'py'];
-
-    for (const cmd of pythonCommands) {
-      try {
-        // Test if command exists
-        const testProcess = spawn(cmd, ['--version']);
-        const result = await new Promise<boolean>((resolve) => {
-          testProcess.on('error', () => resolve(false));
-          testProcess.on('exit', (code) => resolve(code === 0));
-        });
-
-        if (result) {
-          this.outputChannel.appendLine(`Found Python: ${cmd}`);
-          return cmd;
-        }
-      } catch (error) {
-        continue;
-      }
-    }
-
-    throw new Error(
-      'Python not found. Please install Python 3.8+ and ensure it is in your PATH.'
-    );
+    return resolvePythonInterpreter(this.context, this.outputChannel);
   }
 
   /**
