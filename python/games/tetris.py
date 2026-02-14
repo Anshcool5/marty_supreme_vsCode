@@ -377,9 +377,9 @@ def draw_window(surface, grid, score=0):
     sx = top_left_x + play_width + 50
     sy = top_left_y + play_height/2 - 100
 
-    pygame.draw.rect(surface, PANEL, (sx - 16, sy + 110, 170, 60), border_radius=8)
-    pygame.draw.rect(surface, PANEL_ACCENT, (sx - 16, sy + 110, 170, 60), 2, border_radius=8)
-    surface.blit(label, (sx + 4, sy + 125))
+    pygame.draw.rect(surface, PANEL, (sx - 16, sy + 190, 200, 60), border_radius=8)
+    pygame.draw.rect(surface, PANEL_ACCENT, (sx - 16, sy + 190, 200, 60), 2, border_radius=8)
+    surface.blit(label, (sx + 8, sy + 205))
 
     for i in range(len(grid)):
         for j in range(len(grid[i])):
