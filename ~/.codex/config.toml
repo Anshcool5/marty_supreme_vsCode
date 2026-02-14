@@ -1,0 +1,3 @@
+[mcp_servers.marty_pong]
+command = "node"
+args = ["C:/Users/prana/Documents/Projects/marty_supreme_vsCode/mcp/dist/server.js"]

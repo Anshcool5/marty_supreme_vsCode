@@ -67,11 +67,11 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function resolvePythonExecutable(): Promise<"python3" | string> {
+async function resolvePythonExecutable(): Promise<string> {
   if (await fileExists(venvPythonPath)) {
     return venvPythonPath;
   }
-  return "python3";
+  return "python";
 }
 
 function toolResponse(result: Record<string, unknown>, isError = false) {
