@@ -34,6 +34,10 @@
       {
         "command": "marty-supreme.runTetris",
         "title": "Marty Supreme: Run Tetris 1926"
+      },
+      {
+        "command": "marty-supreme.runBlackjack",
+        "title": "Marty Supreme: Run Blackjack 1940s"
       }
     ]
   },

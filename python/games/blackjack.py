@@ -36,6 +36,20 @@ SUIT_TO_ASSET = {
     "D": "diamonds",
     "C": "clubs",
 }
+DECK_ORIGIN = (WINDOW_WIDTH - 150, 290)
+ANIM_DURATION_MS = 260
+ANIM_STAGGER_MS = 110
+
+# 1940s-inspired palette
+BG_TOP = (16, 48, 35)
+BG_BOTTOM = (8, 24, 18)
+GOLD = (197, 158, 94)
+GOLD_SOFT = (232, 209, 164)
+TEXT_IVORY = (246, 236, 208)
+PANEL_BG = (20, 58, 42)
+BUTTON_BG = (98, 62, 31)
+BUTTON_HOVER = (128, 82, 40)
+BUTTON_DISABLED = (72, 72, 72)
 
 
 class Phase(str, Enum):
@@ -116,6 +130,24 @@ class Hand:
 
 
 @dataclass
+class VisualCard:
+    card: Card
+    start_pos: Tuple[float, float]
+    target_pos: Tuple[float, float]
+    start_ms: int
+    duration_ms: int = ANIM_DURATION_MS
+
+    def position(self, now_ms: int) -> Tuple[int, int]:
+        if now_ms <= self.start_ms:
+            return int(self.start_pos[0]), int(self.start_pos[1])
+        progress = min(1.0, (now_ms - self.start_ms) / self.duration_ms)
+        eased = 1.0 - (1.0 - progress) ** 3
+        x = self.start_pos[0] + (self.target_pos[0] - self.start_pos[0]) * eased
+        y = self.start_pos[1] + (self.target_pos[1] - self.start_pos[1]) * eased
+        return int(x), int(y)
+
+
+@dataclass
 class GameState:
     bankroll: int
     min_bet: int = MIN_BET
@@ -128,12 +160,16 @@ class GameState:
     pushes: int = 0
     player_hand: Hand = field(default_factory=Hand)
     dealer_hand: Hand = field(default_factory=Hand)
+    player_visual_cards: List[VisualCard] = field(default_factory=list)
+    dealer_visual_cards: List[VisualCard] = field(default_factory=list)
     deck: Deck = field(default_factory=Deck)
     can_start_new_round: bool = True
 
     def reset_for_next_round(self) -> None:
         self.player_hand = Hand()
         self.dealer_hand = Hand()
+        self.player_visual_cards = []
+        self.dealer_visual_cards = []
         self.round_result = RoundResult.NONE
         self.phase = Phase.BETTING
         self.message = "Place your bet and click Deal."
@@ -154,10 +190,15 @@ class Button:
     label: str
     enabled: bool = True
 
-    def draw(self, surface: pygame.Surface, font: pygame.font.Font) -> None:
-        fill = (48, 114, 77) if self.enabled else (90, 90, 90)
-        border = (235, 225, 200) if self.enabled else (140, 140, 140)
-        text_color = (250, 250, 250) if self.enabled else (190, 190, 190)
+    def draw(self, surface: pygame.Surface, font: pygame.font.Font, hovered: bool = False) -> None:
+        if not self.enabled:
+            fill = BUTTON_DISABLED
+            border = (120, 120, 120)
+            text_color = (185, 185, 185)
+        else:
+            fill = BUTTON_HOVER if hovered else BUTTON_BG
+            border = GOLD
+            text_color = TEXT_IVORY
         pygame.draw.rect(surface, fill, self.rect, border_radius=8)
         pygame.draw.rect(surface, border, self.rect, width=2, border_radius=8)
         label_surface = font.render(self.label, True, text_color)
@@ -201,13 +242,57 @@ def load_card_images(base_dir: str) -> Dict[str, pygame.Surface]:
     return images
 
 
-def deal_initial_cards(state: GameState) -> None:
+def hand_anchor(owner: str) -> Tuple[int, int]:
+    if owner == "dealer":
+        return 40, 170
+    return 40, 430
+
+
+def add_visual_card(
+    state: GameState,
+    owner: str,
+    card: Card,
+    now_ms: int,
+    delay_ms: int = 0,
+) -> None:
+    if owner == "dealer":
+        idx = len(state.dealer_hand.cards) - 1
+        target_x, target_y = hand_anchor("dealer")
+        target = (target_x + idx * (CARD_WIDTH + CARD_GAP), target_y)
+        state.dealer_visual_cards.append(
+            VisualCard(card=card, start_pos=DECK_ORIGIN, target_pos=target, start_ms=now_ms + delay_ms)
+        )
+    else:
+        idx = len(state.player_hand.cards) - 1
+        target_x, target_y = hand_anchor("player")
+        target = (target_x + idx * (CARD_WIDTH + CARD_GAP), target_y)
+        state.player_visual_cards.append(
+            VisualCard(card=card, start_pos=DECK_ORIGIN, target_pos=target, start_ms=now_ms + delay_ms)
+        )
+
+
+def deal_initial_cards(state: GameState, now_ms: int) -> None:
     state.player_hand = Hand()
     state.dealer_hand = Hand()
-    state.player_hand.add(state.deck.draw())
-    state.dealer_hand.add(state.deck.draw())
-    state.player_hand.add(state.deck.draw())
-    state.dealer_hand.add(state.deck.draw())
+    state.player_visual_cards = []
+    state.dealer_visual_cards = []
+
+    # Deal order: player, dealer, player, dealer (staggered animation)
+    card = state.deck.draw()
+    state.player_hand.add(card)
+    add_visual_card(state, "player", card, now_ms, delay_ms=0)
+
+    card = state.deck.draw()
+    state.dealer_hand.add(card)
+    add_visual_card(state, "dealer", card, now_ms, delay_ms=ANIM_STAGGER_MS)
+
+    card = state.deck.draw()
+    state.player_hand.add(card)
+    add_visual_card(state, "player", card, now_ms, delay_ms=ANIM_STAGGER_MS * 2)
+
+    card = state.deck.draw()
+    state.dealer_hand.add(card)
+    add_visual_card(state, "dealer", card, now_ms, delay_ms=ANIM_STAGGER_MS * 3)
 
 
 def settle_round(state: GameState, result: RoundResult) -> None:
@@ -251,12 +336,22 @@ def resolve_natural_blackjacks(state: GameState) -> bool:
     return False
 
 
-def dealer_play(state: GameState) -> None:
+def dealer_play(state: GameState, now_ms: int) -> None:
     state.phase = Phase.DEALER_TURN
+    dealer_draw_count = 0
     while True:
         total, _ = state.dealer_hand.value()
         if total < 17:
-            state.dealer_hand.add(state.deck.draw())
+            card = state.deck.draw()
+            state.dealer_hand.add(card)
+            add_visual_card(
+                state,
+                "dealer",
+                card,
+                now_ms,
+                delay_ms=ANIM_STAGGER_MS * dealer_draw_count,
+            )
+            dealer_draw_count += 1
         else:
             break
 
@@ -275,17 +370,41 @@ def compare_hands(state: GameState) -> None:
         settle_round(state, RoundResult.PUSH)
 
 
+def draw_background(surface: pygame.Surface) -> None:
+    for y in range(WINDOW_HEIGHT):
+        blend = y / float(WINDOW_HEIGHT)
+        color = (
+            int(BG_TOP[0] + (BG_BOTTOM[0] - BG_TOP[0]) * blend),
+            int(BG_TOP[1] + (BG_BOTTOM[1] - BG_TOP[1]) * blend),
+            int(BG_TOP[2] + (BG_BOTTOM[2] - BG_TOP[2]) * blend),
+        )
+        pygame.draw.line(surface, color, (0, y), (WINDOW_WIDTH, y))
+
+    frame = pygame.Rect(20, 18, WINDOW_WIDTH - 40, WINDOW_HEIGHT - 36)
+    pygame.draw.rect(surface, GOLD, frame, width=3, border_radius=14)
+    pygame.draw.rect(surface, GOLD_SOFT, pygame.Rect(28, 26, WINDOW_WIDTH - 56, WINDOW_HEIGHT - 52), width=1, border_radius=12)
+
+    # Gentle scanlines for old-screen vibe
+    overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+    for y in range(0, WINDOW_HEIGHT, 4):
+        pygame.draw.line(overlay, (0, 0, 0, 20), (0, y), (WINDOW_WIDTH, y))
+    surface.blit(overlay, (0, 0))
+
+
 def draw_cards(
     surface: pygame.Surface,
     images: Dict[str, pygame.Surface],
-    hand: Hand,
-    start_x: int,
-    y: int,
+    visuals: List[VisualCard],
+    now_ms: int,
     hide_second: bool = False,
 ) -> None:
-    for idx, card in enumerate(hand.cards):
-        x = start_x + idx * (CARD_WIDTH + CARD_GAP)
-        key = "card_back.png" if hide_second and idx == 1 else card.image_key
+    for idx, visual in enumerate(visuals):
+        x, y = visual.position(now_ms)
+        key = "card_back.png" if hide_second and idx == 1 else visual.card.image_key
+
+        shadow = pygame.Surface((CARD_WIDTH + 6, CARD_HEIGHT + 6), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0, 0, 0, 70), shadow.get_rect(), border_radius=8)
+        surface.blit(shadow, (x + 4, y + 4))
         surface.blit(images[key], (x, y))
 
 
@@ -309,36 +428,52 @@ def build_buttons(state: GameState) -> Dict[str, Button]:
 
 
 def render(surface: pygame.Surface, state: GameState, images: Dict[str, pygame.Surface]) -> Dict[str, Button]:
-    surface.fill((22, 92, 64))
-    header_font = pygame.font.SysFont("georgia", 34, bold=True)
+    now_ms = pygame.time.get_ticks()
+    draw_background(surface)
+
+    header_font = pygame.font.SysFont("georgia", 40, bold=True)
     text_font = pygame.font.SysFont("georgia", 24)
     small_font = pygame.font.SysFont("georgia", 20)
+    mono_font = pygame.font.SysFont("couriernew", 20, bold=True)
 
-    title = header_font.render("BLACKJACK", True, (245, 238, 215))
-    surface.blit(title, (WINDOW_WIDTH // 2 - title.get_width() // 2, 20))
+    title = header_font.render("MARTY SUPREME BLACKJACK", True, TEXT_IVORY)
+    surface.blit(title, (WINDOW_WIDTH // 2 - title.get_width() // 2, 24))
+    subtitle = small_font.render("1940s Lounge Edition", True, GOLD_SOFT)
+    surface.blit(subtitle, (WINDOW_WIDTH // 2 - subtitle.get_width() // 2, 68))
 
+    pygame.draw.rect(surface, PANEL_BG, (32, 98, WINDOW_WIDTH - 64, 72), border_radius=10)
+    pygame.draw.rect(surface, GOLD, (32, 98, WINDOW_WIDTH - 64, 72), width=2, border_radius=10)
     stats = (
         f"Bankroll: {state.bankroll}    Bet: {state.current_bet}    "
-        f"W/L/P: {state.wins}/{state.losses}/{state.pushes}"
+        f"Record W/L/P: {state.wins}/{state.losses}/{state.pushes}"
     )
-    surface.blit(text_font.render(stats, True, (235, 235, 235)), (40, 75))
+    surface.blit(text_font.render(stats, True, TEXT_IVORY), (48, 120))
 
     dealer_total, _ = state.dealer_hand.value()
     player_total, _ = state.player_hand.value()
     hide_hole = state.phase == Phase.PLAYER_TURN
     dealer_value_text = "?" if hide_hole else str(dealer_total)
-    surface.blit(text_font.render(f"Dealer ({dealer_value_text})", True, (245, 245, 245)), (40, 130))
-    surface.blit(text_font.render(f"Player ({player_total})", True, (245, 245, 245)), (40, 390))
 
-    draw_cards(surface, images, state.dealer_hand, start_x=40, y=170, hide_second=hide_hole)
-    draw_cards(surface, images, state.player_hand, start_x=40, y=430)
+    surface.blit(mono_font.render(f"DEALER [{dealer_value_text}]", True, GOLD_SOFT), (40, 186))
+    surface.blit(mono_font.render(f"PLAYER [{player_total}]", True, GOLD_SOFT), (40, 446))
 
-    message_surf = small_font.render(state.message, True, (250, 240, 210))
-    surface.blit(message_surf, (40, 350))
+    draw_cards(surface, images, state.dealer_visual_cards, now_ms=now_ms, hide_second=hide_hole)
+    draw_cards(surface, images, state.player_visual_cards, now_ms=now_ms, hide_second=False)
+
+    pygame.draw.rect(surface, PANEL_BG, (32, 356, WINDOW_WIDTH - 64, 54), border_radius=10)
+    pygame.draw.rect(surface, GOLD, (32, 356, WINDOW_WIDTH - 64, 54), width=2, border_radius=10)
+    message_surf = small_font.render(state.message, True, TEXT_IVORY)
+    surface.blit(message_surf, (48, 374))
 
     buttons = build_buttons(state)
+    mouse_pos = pygame.mouse.get_pos()
     for button in buttons.values():
-        button.draw(surface, text_font)
+        button.draw(surface, text_font, hovered=button.enabled and button.rect.collidepoint(mouse_pos))
+
+    # Deck visual anchor where cards animate from
+    deck_rect = pygame.Rect(DECK_ORIGIN[0], DECK_ORIGIN[1], CARD_WIDTH, CARD_HEIGHT)
+    pygame.draw.rect(surface, GOLD, deck_rect.inflate(8, 8), border_radius=8, width=2)
+    surface.blit(images["card_back.png"], deck_rect.topleft)
 
     pygame.display.flip()
     return buttons
@@ -365,7 +500,7 @@ def run_game(start_bankroll: int, fps: int) -> int:
     clock = pygame.time.Clock()
 
     assets_dir = os.path.normpath(
-        os.path.join(os.path.dirname(__file__), "..", "assets", "cards", "large_cards")
+        os.path.join(os.path.dirname(__file__), "..", "assets", "cards", "medium_cards")
     )
     try:
         card_images = load_card_images(assets_dir)
@@ -389,6 +524,7 @@ def run_game(start_bankroll: int, fps: int) -> int:
                 running = False
                 break
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                click_ms = pygame.time.get_ticks()
                 pos = event.pos
                 if state.phase == Phase.BETTING:
                     if "dec" in buttons and buttons["dec"].contains(pos):
@@ -403,19 +539,21 @@ def run_game(start_bankroll: int, fps: int) -> int:
                         elif state.current_bet < state.min_bet or state.current_bet > state.bankroll:
                             state.message = "Invalid bet amount."
                         else:
-                            deal_initial_cards(state)
+                            deal_initial_cards(state, now_ms=click_ms)
                             state.phase = Phase.PLAYER_TURN
                             state.message = "Your turn: Hit or Stand."
                             resolve_natural_blackjacks(state)
                 elif state.phase == Phase.PLAYER_TURN:
                     if "hit" in buttons and buttons["hit"].contains(pos):
-                        state.player_hand.add(state.deck.draw())
+                        card = state.deck.draw()
+                        state.player_hand.add(card)
+                        add_visual_card(state, "player", card, now_ms=click_ms)
                         if state.player_hand.is_bust():
                             settle_round(state, RoundResult.LOSE)
                         else:
                             state.message = "Your turn: Hit or Stand."
                     elif "stand" in buttons and buttons["stand"].contains(pos):
-                        dealer_play(state)
+                        dealer_play(state, now_ms=click_ms)
                         compare_hands(state)
                 elif state.phase == Phase.ROUND_END:
                     if "next" in buttons and buttons["next"].contains(pos):
