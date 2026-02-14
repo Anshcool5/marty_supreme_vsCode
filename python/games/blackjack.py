@@ -380,6 +380,9 @@ class GestureController:
     def _is_finger_extended(self, lm, tip_idx: int, pip_idx: int) -> bool:
         return lm[tip_idx].y < lm[pip_idx].y
 
+    def _is_finger_folded(self, lm, tip_idx: int, pip_idx: int) -> bool:
+        return lm[tip_idx].y > lm[pip_idx].y
+
     def _is_flat_palm(self, lm) -> bool:
         return (
             self._is_finger_extended(lm, 8, 6) and
@@ -389,14 +392,20 @@ class GestureController:
         )
 
     def _is_fist(self, lm) -> bool:
-        folded_fingers = (
-            lm[8].y > lm[6].y and
-            lm[12].y > lm[10].y and
-            lm[16].y > lm[14].y and
-            lm[20].y > lm[18].y
+        # Match Pong's more reliable approach: curled fingers + contracted thumb.
+        folded_count = sum(
+            (
+                self._is_finger_folded(lm, 8, 6),
+                self._is_finger_folded(lm, 12, 10),
+                self._is_finger_folded(lm, 16, 14),
+                self._is_finger_folded(lm, 20, 18),
+            )
         )
-        thumb_folded = lm[4].y > lm[3].y
-        return folded_fingers and thumb_folded
+        folded_fingers = folded_count >= 3
+
+        # Thumb check is orientation-tolerant to improve webcam robustness.
+        thumb_not_extended = abs(lm[4].x - lm[2].x) < 0.12 or lm[4].y > lm[2].y
+        return folded_fingers and thumb_not_extended
 
     def _increment_stability(self, gesture: str) -> bool:
         self.gesture_stability[gesture] = min(
