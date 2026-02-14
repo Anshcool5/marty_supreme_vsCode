@@ -400,10 +400,8 @@ class MartySupremePong1950:
             if self.two_player
             else "Tracking left hand..."
         )
+        self._start_music_sequence(start_with_boot=False)
         self._reset_ball(direction=random.choice([-1, 1]))
-        self.paddle_hit_sound = None
-        self.wall_bounce_sound = None
-        self.missed_shot_sound = None
 
     def _play_theme_sound(self, sound: "pygame.mixer.Sound | None") -> None:
         if sound is None:
@@ -429,6 +427,7 @@ class MartySupremePong1950:
             "paddle_hit_sound": "paddle_sound.mp3",
             "wall_bounce_sound": "ball_sound.mp3",
             "missed_shot_sound": "missed_shot.mp3",
+            "pong_theme_sound": "pong_theme.mp3",
         }
         for attr, filename in sounds.items():
             sound_path = os.path.join(themes_dir, filename)
@@ -437,10 +436,64 @@ class MartySupremePong1950:
                 continue
             try:
                 loaded = pygame.mixer.Sound(sound_path)
-                loaded.set_volume(1.0)
+                loaded.set_volume(0.95 if attr == "pong_theme_sound" else 1.0)
                 setattr(self, attr, loaded)
             except pygame.error as err:
                 print(f"Warning: failed to load Pong theme sound ({filename}): {err}")
+
+        boot_dir = os.path.normpath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "assets",
+                "audio_effects",
+                "boot",
+            )
+        )
+        boot_candidates = ["marty_supreme.mp3", "matry_supreme.mp3"]
+        boot_path = None
+        for candidate in boot_candidates:
+            candidate_path = os.path.join(boot_dir, candidate)
+            if os.path.exists(candidate_path):
+                boot_path = candidate_path
+                break
+        if boot_path is None:
+            print(f"Warning: Pong boot sound missing in {boot_dir} (expected one of {boot_candidates})")
+            return
+        try:
+            self.pong_boot_sound = pygame.mixer.Sound(boot_path)
+            self.pong_boot_sound.set_volume(1.0)
+        except pygame.error as err:
+            print(f"Warning: failed to load Pong boot sound ({os.path.basename(boot_path)}): {err}")
+
+    def _start_music_sequence(self, start_with_boot: bool = False) -> None:
+        if self.music_channel is None:
+            return
+        if start_with_boot and self.pong_boot_sound is not None:
+            try:
+                self.music_channel.play(self.pong_boot_sound)
+                self.theme_started = False
+                return
+            except pygame.error:
+                pass
+        if self.pong_theme_sound is not None:
+            try:
+                self.music_channel.play(self.pong_theme_sound, loops=-1)
+                self.theme_started = True
+            except pygame.error:
+                pass
+
+    def _update_music_sequence(self) -> None:
+        if self.music_channel is None or self.theme_started:
+            return
+        if self.music_channel.get_busy():
+            return
+        if self.pong_theme_sound is not None:
+            try:
+                self.music_channel.play(self.pong_theme_sound, loops=-1)
+                self.theme_started = True
+            except pygame.error:
+                pass
 
     def _reset_ball(self, direction: int) -> None:
         self.ball_x = self.WIDTH / 2
@@ -733,8 +786,14 @@ class MartySupremePong1950:
             return 1
 
         self.audio_effects = GameAudioEffects()
-        self.audio_effects.play_boot()
         self._load_theme_sounds()
+        try:
+            pygame.mixer.set_num_channels(16)
+            pygame.mixer.set_reserved(2)
+            self.music_channel = pygame.mixer.Channel(1)
+        except pygame.error:
+            self.music_channel = None
+        self._start_music_sequence(start_with_boot=True)
 
         running = True
         try:
@@ -768,6 +827,7 @@ class MartySupremePong1950:
 
                 if not self.mode_menu_active:
                     self._update_logic()
+                    self._update_music_sequence()
                 self._draw(screen, (title_font, text_font, small_font))
                 if self.mode_menu_active:
                     self._draw_mode_menu(screen, (title_font, text_font, small_font))
