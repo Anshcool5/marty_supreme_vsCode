@@ -5,7 +5,7 @@
   "version": "0.0.1",
   "publisher": "marty-supreme",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.109.0"
   },
   "categories": [
     "Other",
@@ -18,10 +18,23 @@
     "hackathon"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onCommand:marty-supreme.startThinkingGame",
+    "onCommand:marty-supreme.startThinkingGameDebug",
+    "onCommand:marty-supreme.stopThinkingGame",
+    "onChatParticipant:pingpong.agent"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "chatParticipants": [
+      {
+        "id": "pingpong.agent",
+        "name": "pingpong",
+        "fullName": "PingPong Agent",
+        "description": "Plays a hand-tracked pong mini-game while handling your chat request.",
+        "isSticky": true
+      }
+    ],
     "commands": [
       {
         "command": "marty-supreme.hello",
@@ -30,6 +43,18 @@
       {
         "command": "marty-supreme.runExampleGame",
         "title": "Marty Supreme: Run Example Game"
+      },
+      {
+        "command": "marty-supreme.startThinkingGame",
+        "title": "Marty Supreme: Start Thinking Ping Pong"
+      },
+      {
+        "command": "marty-supreme.startThinkingGameDebug",
+        "title": "Marty Supreme: Start Thinking Ping Pong (Debug Preview)"
+      },
+      {
+        "command": "marty-supreme.stopThinkingGame",
+        "title": "Marty Supreme: Stop Thinking Ping Pong"
       },
       {
         "command": "marty-supreme.runTetris",
@@ -48,7 +73,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "^1.109.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.3.0",
     "esbuild": "^0.20.0"

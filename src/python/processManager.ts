@@ -3,6 +3,7 @@ import { spawn, ChildProcess } from 'child_process';
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
+import { resolvePythonInterpreter } from './interpreter';
 
 export class PythonProcessManager {
   private processes: Map<string, ChildProcess> = new Map();
@@ -54,6 +55,7 @@ export class PythonProcessManager {
     throw new Error(
       'Python not found. Please install Python 3.8+ and ensure it is in your PATH.'
     );
+    return resolvePythonInterpreter(this.context, this.outputChannel);
   }
 
   /**
