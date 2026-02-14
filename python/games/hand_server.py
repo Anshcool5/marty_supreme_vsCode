@@ -1,18 +1,30 @@
 #!/usr/bin/env python3
 """
 Hand tracking server for Marty Supreme ping pong webview.
-Streams normalized paddle position over WebSocket.
+Also supports standalone 1950s-themed Pong via --run-pong.
 """
 
 import argparse
 import asyncio
 import json
+import random
 import sys
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
-import websockets
+
+try:
+    import websockets
+    HAS_WEBSOCKETS = True
+except Exception:
+    HAS_WEBSOCKETS = False
+
+try:
+    import pygame
+    HAS_PYGAME = True
+except Exception:
+    HAS_PYGAME = False
 
 MEDIAPIPE_IMPORT_ERROR = ""
 try:
@@ -129,6 +141,39 @@ class HandTracker:
         next_conf = max(0.0, self.state.confidence - 0.08)
         self._update(confidence=next_conf, ok=True, error="")
 
+    def _is_finger_folded(self, lm, tip_idx: int, pip_idx: int) -> bool:
+        return lm[tip_idx].y > lm[pip_idx].y
+
+    def _is_fist(self, lm) -> bool:
+        folded_four = (
+            self._is_finger_folded(lm, 8, 6)
+            and self._is_finger_folded(lm, 12, 10)
+            and self._is_finger_folded(lm, 16, 14)
+            and self._is_finger_folded(lm, 20, 18)
+        )
+        thumb_not_extended = abs(lm[4].x - lm[2].x) < 0.10
+        return folded_four and thumb_not_extended
+
+    def _is_thumbs_up(self, lm) -> bool:
+        folded_four = (
+            self._is_finger_folded(lm, 8, 6)
+            and self._is_finger_folded(lm, 12, 10)
+            and self._is_finger_folded(lm, 16, 14)
+            and self._is_finger_folded(lm, 20, 18)
+        )
+        thumb_up = lm[4].y < lm[3].y < lm[2].y
+        return folded_four and thumb_up
+
+    def _is_thumbs_down(self, lm) -> bool:
+        folded_four = (
+            self._is_finger_folded(lm, 8, 6)
+            and self._is_finger_folded(lm, 12, 10)
+            and self._is_finger_folded(lm, 16, 14)
+            and self._is_finger_folded(lm, 20, 18)
+        )
+        thumb_down = lm[4].y > lm[3].y > lm[2].y
+        return folded_four and thumb_down
+
     def step(self) -> bool:
         if not self._cap:
             self._update(ok=False, error="Camera not initialized", mode="error")
@@ -140,7 +185,6 @@ class HandTracker:
             return True
 
         frame = cv2.flip(frame, 1)
-        h, w, _ = frame.shape
         detection_found = False
         mode = "idle"
 
@@ -164,14 +208,22 @@ class HandTracker:
                 if left_idx is not None:
                     hand_landmarks = result.multi_hand_landmarks[left_idx]
                     landmarks = hand_landmarks.landmark
-
-                    # Left palm center tracking (wrist + palm knuckle bases), Y axis only.
-                    palm_ids = [0, 5, 9, 13, 17]
-                    palm_center_y = sum(landmarks[i].y for i in palm_ids) / float(len(palm_ids))
-                    target_y = palm_center_y
-                    target_x = self._smooth_x  # Y-only control for paddle movement.
-
                     confidence = max(0.65, min(0.99, left_conf if left_conf > 0 else 0.9))
+                    target_x = self._smooth_x
+
+                    if self._is_thumbs_up(landmarks):
+                        mode = "thumbs_up"
+                        target_y = max(0.0, self._smooth_y - 0.06)
+                    elif self._is_thumbs_down(landmarks):
+                        mode = "thumbs_down"
+                        target_y = min(1.0, self._smooth_y + 0.06)
+                    elif self._is_fist(landmarks):
+                        mode = "fist_hold"
+                        target_y = self._smooth_y
+                    else:
+                        mode = "gesture_idle"
+                        target_y = self._smooth_y
+
                     self._set_detected(target_x, target_y, confidence=confidence, mode=mode)
 
                     if self._show_preview and self._drawing:
@@ -203,7 +255,7 @@ class HandTracker:
             detection_flag = "TRACKING" if detection_found else "SEARCHING"
             overlay_text = (
                 f"{detection_flag} mode={mode} conf={snapshot['confidence']:.2f} "
-                f"x={snapshot['paddleX']:.2f} y={snapshot['paddleY']:.2f}"
+                f"y={snapshot['paddleY']:.2f}"
             )
             cv2.putText(
                 frame,
@@ -226,6 +278,198 @@ class HandTracker:
         return True
 
 
+class MartySupremePong1950:
+    WIDTH = 980
+    HEIGHT = 620
+    PADDLE_W = 14
+    PADDLE_H = 102
+    BALL_SIZE = 14
+    MARGIN = 24
+    PLAY_TOP = 128
+    PLAY_BOTTOM_PAD = 32
+
+    BG_TOP = (16, 46, 37)
+    BG_BOTTOM = (5, 17, 12)
+    GOLD = (214, 179, 108)
+    IVORY = (244, 234, 207)
+    COPPER = (122, 78, 39)
+
+    def __init__(self, camera_index: int = 0, show_preview: bool = False):
+        self.camera_index = camera_index
+        self.show_preview = show_preview
+        self.tracker = HandTracker(camera_index=camera_index, show_preview=show_preview)
+
+        play_bottom = self.HEIGHT - self.PLAY_BOTTOM_PAD
+        self.left_y = self.PLAY_TOP + ((play_bottom - self.PLAY_TOP - self.PADDLE_H) / 2)
+        self.right_y = self.PLAY_TOP + ((play_bottom - self.PLAY_TOP - self.PADDLE_H) / 2)
+        self.ball_x = self.WIDTH / 2
+        self.ball_y = (self.PLAY_TOP + (play_bottom - self.BALL_SIZE)) / 2
+        self.ball_vx = 7.0
+        self.ball_vy = 2.8
+        self.left_score = 0
+        self.right_score = 0
+        self.status = "Tracking left hand..."
+
+    def _reset_ball(self, direction: int) -> None:
+        self.ball_x = self.WIDTH / 2
+        self.ball_y = (self.PLAY_TOP + (self.HEIGHT - self.PLAY_BOTTOM_PAD - self.BALL_SIZE)) / 2
+        self.ball_vx = direction * (6.4 + random.random() * 1.9)
+        self.ball_vy = random.uniform(-3.4, 3.4)
+
+    def _update_logic(self) -> None:
+        play_bottom = self.HEIGHT - self.PLAY_BOTTOM_PAD
+        move_speed = 8.6
+        gesture = self.tracker.state.mode
+        if gesture == "thumbs_up":
+            self.left_y -= move_speed
+        elif gesture == "thumbs_down":
+            self.left_y += move_speed
+        elif gesture == "fist_hold":
+            pass
+        self.left_y = max(self.PLAY_TOP, min(play_bottom - self.PADDLE_H, self.left_y))
+
+        ai_center = self.right_y + self.PADDLE_H / 2
+        ball_center = self.ball_y + self.BALL_SIZE / 2
+        ai_speed = 5.5
+        if ball_center < ai_center - 8:
+            self.right_y -= ai_speed
+        elif ball_center > ai_center + 8:
+            self.right_y += ai_speed
+        self.right_y = max(self.PLAY_TOP, min(play_bottom - self.PADDLE_H, self.right_y))
+
+        self.ball_x += self.ball_vx
+        self.ball_y += self.ball_vy
+
+        if self.ball_y <= self.PLAY_TOP:
+            self.ball_y = self.PLAY_TOP
+            self.ball_vy = abs(self.ball_vy)
+        elif self.ball_y >= play_bottom - self.BALL_SIZE:
+            self.ball_y = play_bottom - self.BALL_SIZE
+            self.ball_vy *= -1
+
+        left_paddle_x = self.MARGIN
+        if (
+            self.ball_x <= left_paddle_x + self.PADDLE_W
+            and self.ball_y + self.BALL_SIZE >= self.left_y
+            and self.ball_y <= self.left_y + self.PADDLE_H
+        ):
+            self.ball_x = left_paddle_x + self.PADDLE_W
+            self.ball_vx = abs(self.ball_vx) + 0.18
+            offset = (self.ball_y - (self.left_y + self.PADDLE_H / 2)) / (self.PADDLE_H / 2)
+            self.ball_vy = offset * 4.0
+
+        right_paddle_x = self.WIDTH - self.MARGIN - self.PADDLE_W
+        if (
+            self.ball_x + self.BALL_SIZE >= right_paddle_x
+            and self.ball_y + self.BALL_SIZE >= self.right_y
+            and self.ball_y <= self.right_y + self.PADDLE_H
+        ):
+            self.ball_x = right_paddle_x - self.BALL_SIZE
+            self.ball_vx = -abs(self.ball_vx) - 0.18
+            offset = (self.ball_y - (self.right_y + self.PADDLE_H / 2)) / (self.PADDLE_H / 2)
+            self.ball_vy = offset * 4.0
+
+        if self.ball_x < -20:
+            self.right_score += 1
+            self._reset_ball(direction=1)
+
+        if self.ball_x > self.WIDTH + 20:
+            self.left_score += 1
+            self._reset_ball(direction=-1)
+
+        if self.tracker.state.confidence < 0.2:
+            self.status = "Show LEFT hand: thumbs up/down to move, fist to hold"
+        else:
+            self.status = (
+                f"Gesture={self.tracker.state.mode} "
+                f"conf={self.tracker.state.confidence:.2f} "
+                "| thumbs up/down move, fist holds"
+            )
+
+    def _draw(self, screen, fonts) -> None:
+        title_font, text_font, small_font = fonts
+
+        for y in range(self.HEIGHT):
+            blend = y / float(self.HEIGHT)
+            color = (
+                int(self.BG_TOP[0] + (self.BG_BOTTOM[0] - self.BG_TOP[0]) * blend),
+                int(self.BG_TOP[1] + (self.BG_BOTTOM[1] - self.BG_TOP[1]) * blend),
+                int(self.BG_TOP[2] + (self.BG_BOTTOM[2] - self.BG_TOP[2]) * blend),
+            )
+            pygame.draw.line(screen, color, (0, y), (self.WIDTH, y))
+
+        frame = pygame.Rect(10, 10, self.WIDTH - 20, self.HEIGHT - 20)
+        pygame.draw.rect(screen, self.GOLD, frame, width=3, border_radius=12)
+
+        title = title_font.render("MARTY SUPREME PONG 1950", True, self.IVORY)
+        screen.blit(title, (self.WIDTH // 2 - title.get_width() // 2, 18))
+
+        status_panel = pygame.Rect(24, 66, self.WIDTH - 48, 42)
+        pygame.draw.rect(screen, (19, 65, 49), status_panel, border_radius=8)
+        pygame.draw.rect(screen, self.GOLD, status_panel, width=2, border_radius=8)
+        status_text = small_font.render(self.status + "  |  ESC to quit", True, self.IVORY)
+        screen.blit(status_text, (36, 78))
+
+        for y in range(self.PLAY_TOP, self.HEIGHT - self.PLAY_BOTTOM_PAD, 26):
+            pygame.draw.rect(screen, self.GOLD, (self.WIDTH // 2 - 2, y, 4, 14), border_radius=2)
+
+        left_x = self.MARGIN
+        right_x = self.WIDTH - self.MARGIN - self.PADDLE_W
+        pygame.draw.rect(screen, self.COPPER, (left_x, self.left_y, self.PADDLE_W, self.PADDLE_H), border_radius=6)
+        pygame.draw.rect(screen, self.COPPER, (right_x, self.right_y, self.PADDLE_W, self.PADDLE_H), border_radius=6)
+        pygame.draw.rect(screen, self.IVORY, (self.ball_x, self.ball_y, self.BALL_SIZE, self.BALL_SIZE), border_radius=3)
+
+        score_left = text_font.render(str(self.left_score), True, self.IVORY)
+        score_right = text_font.render(str(self.right_score), True, self.IVORY)
+        screen.blit(score_left, (self.WIDTH * 0.25, 118))
+        screen.blit(score_right, (self.WIDTH * 0.75, 118))
+
+    def run(self) -> int:
+        if not HAS_PYGAME:
+            print("ERROR pygame is required for --run-pong mode.", file=sys.stderr)
+            return 2
+
+        pygame.init()
+        pygame.display.set_caption("Marty Supreme Pong 1950")
+        screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
+        clock = pygame.time.Clock()
+
+        title_font = pygame.font.SysFont("georgia", 44, bold=True)
+        text_font = pygame.font.SysFont("georgia", 40, bold=True)
+        small_font = pygame.font.SysFont("georgia", 22)
+
+        self.tracker.open()
+        if not self.tracker.state.ok and self.tracker.state.error:
+            pygame.quit()
+            print(self.tracker.state.error, file=sys.stderr)
+            return 1
+
+        running = True
+        self._reset_ball(direction=random.choice([-1, 1]))
+        try:
+            while running:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                        running = False
+
+                should_continue = self.tracker.step()
+                if not should_continue:
+                    running = False
+                    break
+
+                self._update_logic()
+                self._draw(screen, (title_font, text_font, small_font))
+                pygame.display.flip()
+                clock.tick(60)
+        finally:
+            self.tracker.close()
+            pygame.quit()
+
+        return 0
+
+
 async def stream_handler(websocket, tracker: HandTracker):
     while True:
         payload = tracker.snapshot()
@@ -234,6 +478,9 @@ async def stream_handler(websocket, tracker: HandTracker):
 
 
 async def run_server(port: int, camera_index: int, show_preview: bool):
+    if not HAS_WEBSOCKETS:
+        raise RuntimeError("websockets package is required for server mode.")
+
     tracker = HandTracker(camera_index=camera_index, show_preview=show_preview)
     tracker.open()
 
@@ -247,7 +494,12 @@ async def run_server(port: int, camera_index: int, show_preview: bool):
         )
     print(f"INFO hand_server listening ws://127.0.0.1:{port}", flush=True)
 
-    async with websockets.serve(lambda ws: stream_handler(ws, tracker), "127.0.0.1", port, ping_interval=20):
+    async with websockets.serve(
+        lambda ws: stream_handler(ws, tracker),
+        "127.0.0.1",
+        port,
+        ping_interval=20,
+    ):
         async def tracking_loop():
             while True:
                 should_continue = tracker.step()
@@ -267,7 +519,16 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--show-preview", action="store_true")
+    parser.add_argument("--run-pong", action="store_true")
     args = parser.parse_args()
+
+    if args.run_pong:
+        game = MartySupremePong1950(
+            camera_index=args.camera_index,
+            show_preview=args.show_preview,
+        )
+        raise SystemExit(game.run())
+
     asyncio.run(run_server(args.port, args.camera_index, args.show_preview))
 
 

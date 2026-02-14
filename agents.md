@@ -13,9 +13,9 @@
 - Redaction rule: secrets -> [REDACTED]
 
 ## Latest Summary (update every run)
-- Current goal: Stabilize Blackjack UX/documentation after mode split and layout adjustments
-- Current status: ✅ Updated - Blackjack now starts with in-game mode selection, has corrected table alignment, and all agent logs are synced to current state
-- Next action: Execute full Extension Host validation for both modes and capture any final threshold/spacing tweaks from live camera use
+- Current goal: Improve Pong play feel with discrete gesture controls and tighter on-screen physics/layout boundaries
+- Current status: ✅ Updated - Pong now uses thumbs up/down to move, fist to hold, with faster ball speed and corrected playfield bounds/alignment
+- Next action: Live-test gesture recognition reliability and tweak speed/sensitivity values based on camera angle and lighting
 
 ---
 
@@ -521,3 +521,97 @@ date '+%Y-%m-%d %H:%M'
 ### TODO / next steps:
 1. Run F5 Extension Host validation for Blackjack Normal mode and capture observations.
 2. Run F5 Extension Host validation for Blackjack Hardcore mode and capture camera/gesture reliability notes.
+
+---
+
+## Run Entry: v8
+- Date/time: 2026-02-14 03:11
+- Tool: Codex (GPT-5)
+- High-level task: Build Pong directly inside `hand_server.py` and run it from extension like other Python games
+- Inputs provided: Request for a 1950s Marty Supreme-themed Pong in `hand_server.py`, single mode only, launched from extension command flow
+
+### Key decisions/assumptions:
+1. **Single mode only**: Implemented one gameplay mode (camera hand-tracked paddle), per request.
+2. **Script reuse**: Kept existing websocket server behavior intact and added a new game mode switch.
+3. **Extension integration**: Added a direct subprocess command (`runPong`) so launch behavior matches Tetris/Blackjack.
+4. **Visual direction**: Implemented 1950s lounge-inspired palette and UI framing in pygame.
+
+### Commands executed:
+```bash
+python/venv/bin/python -m py_compile python/games/hand_server.py
+npm run compile
+date '+%Y-%m-%d %H:%M'
+```
+
+### Files changed:
+1. **python/games/hand_server.py**
+   - Added standalone game class `MartySupremePong1950`.
+   - Added CLI flag `--run-pong` to run the game mode.
+   - Kept existing websocket server mode for non-game use.
+2. **src/extension.ts**
+   - Added command handler `marty-supreme.runPong` to spawn `hand_server.py --run-pong --show-preview`.
+3. **package.json**
+   - Added command contribution `Marty Supreme: Run Pong 1950 (Hand Tracking)`.
+   - Added activation event for `marty-supreme.runPong`.
+
+### Outputs/results:
+- ✅ Pong game now runs from `hand_server.py` as a standalone pygame app.
+- ✅ Extension can launch Pong through Command Palette like other games.
+- ✅ Python and TypeScript compile checks passed.
+
+### Errors/blockers:
+1. Pong runtime requires camera permission and dependencies (`pygame`, `opencv`, `mediapipe`).
+
+### TODO / next steps:
+1. Run F5 and verify `Marty Supreme: Run Pong 1950 (Hand Tracking)` opens reliably.
+2. Tune tracking smoothing and ball speed after live playtest.
+
+---
+
+## Run Entry: v9
+- Date/time: 2026-02-14 03:17
+- Tool: Codex (GPT-5)
+- High-level task: Refine Pong controls and physics alignment for smoother gameplay
+- Inputs provided: Request to reduce jitter, use gesture-based controls (`thumbs up/down`, closed hand hold), increase ball speed, and fix boundary alignment
+
+### Key decisions/assumptions:
+1. **Control model**: Switched from continuous palm-position tracking to discrete gesture controls.
+2. **Gesture mapping**:
+   - `thumbs_up` -> move paddle up
+   - `thumbs_down` -> move paddle down
+   - `fist_hold` -> hold paddle position
+   - other poses -> no movement
+3. **Physics tuning**: Increased initial/reset ball speed while keeping collision response stable.
+4. **Visual bounds**: Defined a dedicated gameplay rectangle and clamped paddles/ball within it to prevent perceived out-of-bounds rendering.
+
+### Commands executed:
+```bash
+python/venv/bin/python -m py_compile python/games/hand_server.py
+npm run compile
+date '+%Y-%m-%d %H:%M'
+```
+
+### Files changed:
+1. **python/games/hand_server.py**
+   - Added gesture helpers (`_is_thumbs_up`, `_is_thumbs_down`, `_is_fist`).
+   - Updated `HandTracker.step()` to emit discrete gesture modes.
+   - Updated Pong control loop to respond to gesture modes instead of direct palm Y.
+   - Increased ball speeds.
+   - Added explicit playfield boundaries and clamping for paddles/ball.
+   - Updated status text to show gesture guidance and current mode/confidence.
+2. **agents.md**
+   - Updated latest summary and added this run entry.
+
+### Outputs/results:
+- ✅ Controls now follow requested gestures (up/down/hold).
+- ✅ Paddle movement is less jittery due to discrete action mapping.
+- ✅ Ball speed increased.
+- ✅ Ball and paddle visuals stay within aligned gameplay bounds.
+- ✅ Python and extension compile checks passed.
+
+### Errors/blockers:
+1. Gesture reliability still depends on camera lighting/background and left-hand detection confidence.
+
+### TODO / next steps:
+1. Run live camera test and adjust movement step size (`move_speed`) if needed.
+2. Tune thumb/fist detection thresholds for your exact hand orientation and camera placement.

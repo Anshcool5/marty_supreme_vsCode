@@ -147,11 +147,53 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  // Register Pong game command (hand-tracked)
+  const pongGameCommand = vscode.commands.registerCommand(
+    'marty-supreme.runPong',
+    async () => {
+      outputChannel.show();
+      outputChannel.appendLine('Starting Pong 1950 (hand tracking)...');
+
+      try {
+        const pythonManager = new PythonProcessManager(context, outputChannel);
+        const gameScriptPath = path.join(
+          context.extensionPath,
+          'python',
+          'games',
+          'hand_server.py'
+        );
+
+        const process = await pythonManager.spawn(gameScriptPath, [
+          '--run-pong',
+          '--show-preview',
+        ]);
+
+        if (process) {
+          outputChannel.appendLine('Pong 1950 started successfully!');
+          vscode.window.showInformationMessage(
+            'Marty Supreme: Pong 1950 is running!'
+          );
+
+          process.on('exit', (code) => {
+            outputChannel.appendLine(`Pong process exited with code ${code}`);
+            vscode.window.showInformationMessage('Pong 1950 ended.');
+          });
+        }
+      } catch (error) {
+        const errorMsg =
+          error instanceof Error ? error.message : 'Unknown error occurred';
+        outputChannel.appendLine(`Error: ${errorMsg}`);
+        vscode.window.showErrorMessage(`Failed to start Pong: ${errorMsg}`);
+      }
+    }
+  );
+
   // Add commands to subscriptions
   context.subscriptions.push(helloCommand);
   context.subscriptions.push(exampleGameCommand);
   context.subscriptions.push(tetrisGameCommand);
   context.subscriptions.push(blackjackGameCommand);
+  context.subscriptions.push(pongGameCommand);
   context.subscriptions.push(outputChannel);
 
   // Show welcome message
