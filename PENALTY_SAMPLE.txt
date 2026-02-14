@@ -1,3 +1,2 @@
-Line 1: This is a sample line
 Line 2: Another sample line
 Line 6: Last sample line
