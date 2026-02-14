@@ -268,11 +268,27 @@ async function launchGame(
   const gameTag = gameId;
 
   try {
-    const child = spawn(pythonExecutable, scriptAndArgs, {
+    // On Windows, we need special handling for GUI apps like pygame
+    const isWindows = process.platform === "win32";
+    const spawnOptions: any = {
       cwd: repoRoot,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+      // On Windows with detached mode, we must ignore all stdio to prevent process termination
+      stdio: isWindows ? "ignore" : ["ignore", "pipe", "pipe"],
+    };
+
+    // For Windows, detach the process so the GUI window can appear properly
+    if (isWindows) {
+      spawnOptions.detached = true;
+      spawnOptions.windowsHide = false;
+    }
+
+    const child = spawn(pythonExecutable, scriptAndArgs, spawnOptions);
+
+    // Allow parent to exit independently when detached
+    if (isWindows) {
+      child.unref();
+    }
 
     child.stdout?.on("data", (data: Buffer) => {
       log(`${gameTag} stdout: ${data.toString().trim()}`);
