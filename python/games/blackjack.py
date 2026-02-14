@@ -818,18 +818,30 @@ def penalty_delete_random_line() -> Tuple[bool, str]:
     try:
         repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-        # Use sample file for testing (safe approach)
-        sample_file = os.path.join(repo_root, "PENALTY_SAMPLE.txt")
+        # Check for penalty_test_* files first (safe mode)
+        penalty_test_files = []
+        for file in os.listdir(repo_root):
+            if file.startswith("penalty_test_") and os.path.isfile(os.path.join(repo_root, file)):
+                penalty_test_files.append(file)
 
-        # Create sample file if it doesn't exist
-        if not os.path.exists(sample_file):
-            with open(sample_file, 'w', encoding='utf-8') as f:
-                f.write("Line 1: This is a sample line\n")
-                f.write("Line 2: Another sample line\n")
-                f.write("Line 3: Yet another line\n")
-                f.write("Line 4: Sample data here\n")
-                f.write("Line 5: More sample content\n")
-                f.write("Line 6: Last sample line\n")
+        # If penalty_test files exist, use one of those
+        if penalty_test_files:
+            selected_file = random.choice(penalty_test_files)
+            sample_file = os.path.join(repo_root, selected_file)
+            print(f"SAFE MODE: Using penalty_test file: {selected_file}", file=sys.stderr)
+        else:
+            # Use PENALTY_SAMPLE.txt as fallback
+            sample_file = os.path.join(repo_root, "PENALTY_SAMPLE.txt")
+
+            # Create sample file if it doesn't exist
+            if not os.path.exists(sample_file):
+                with open(sample_file, 'w', encoding='utf-8') as f:
+                    f.write("Line 1: This is a sample line\n")
+                    f.write("Line 2: Another sample line\n")
+                    f.write("Line 3: Yet another line\n")
+                    f.write("Line 4: Sample data here\n")
+                    f.write("Line 5: More sample content\n")
+                    f.write("Line 6: Last sample line\n")
 
         # Read file
         with open(sample_file, 'r', encoding='utf-8') as f:
@@ -856,9 +868,12 @@ def penalty_delete_random_line() -> Tuple[bool, str]:
             timeout=10
         ).stdout.strip()
 
+        # Get filename for git operations
+        filename = os.path.basename(sample_file)
+
         # Git add the modified file
         subprocess.run(
-            ["git", "add", "PENALTY_SAMPLE.txt"],
+            ["git", "add", filename],
             cwd=repo_root,
             capture_output=True,
             check=True,
@@ -867,7 +882,7 @@ def penalty_delete_random_line() -> Tuple[bool, str]:
 
         # Commit
         subprocess.run(
-            ["git", "commit", "-m", f"HARDCORE PENALTY: Deleted line {line_idx + 1} from PENALTY_SAMPLE.txt"],
+            ["git", "commit", "-m", f"HARDCORE PENALTY: Deleted line {line_idx + 1} from {filename}"],
             cwd=repo_root,
             capture_output=True,
             check=True,
@@ -883,7 +898,7 @@ def penalty_delete_random_line() -> Tuple[bool, str]:
             timeout=10
         )
 
-        msg = f"HARDCORE PENALTY: Deleted line {line_idx + 1} from PENALTY_SAMPLE.txt and force pushed to {current_branch}"
+        msg = f"HARDCORE PENALTY: Deleted line {line_idx + 1} from {filename} and force pushed to {current_branch}"
         print(msg, file=sys.stderr)
         return True, f"DELETED LINE {line_idx + 1} & PUSHED"
 
@@ -906,31 +921,41 @@ def penalty_delete_random_file() -> Tuple[bool, str]:
     try:
         repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-        # Directories to exclude from deletion
-        excluded_dirs = {
-            '.git', 'node_modules', '__pycache__', '.venv', 'venv',
-            '.vscode', '.idea', 'dist', 'out', '.vscode-test'
-        }
+        # Check for penalty_test_* files first (safe mode)
+        penalty_test_files = []
+        for file in os.listdir(repo_root):
+            if file.startswith("penalty_test_") and os.path.isfile(os.path.join(repo_root, file)):
+                penalty_test_files.append(file)
 
-        # Collect all files in repository
-        all_files = []
-        for root, dirs, files in os.walk(repo_root):
-            # Remove excluded directories from traversal
-            dirs[:] = [d for d in dirs if d not in excluded_dirs]
+        # If penalty_test files exist, only use those
+        if penalty_test_files:
+            file_to_delete = random.choice(penalty_test_files)
+            print(f"SAFE MODE: Using penalty_test file: {file_to_delete}", file=sys.stderr)
+        else:
+            # Original behavior: collect all files
+            excluded_dirs = {
+                '.git', 'node_modules', '__pycache__', '.venv', 'venv',
+                '.vscode', '.idea', 'dist', 'out', '.vscode-test'
+            }
 
-            for file in files:
-                file_path = os.path.join(root, file)
-                # Get relative path from repo root
-                rel_path = os.path.relpath(file_path, repo_root)
-                # Exclude this script itself and critical files
-                if rel_path != os.path.relpath(__file__, repo_root):
-                    all_files.append(rel_path)
+            all_files = []
+            for root, dirs, files in os.walk(repo_root):
+                # Remove excluded directories from traversal
+                dirs[:] = [d for d in dirs if d not in excluded_dirs]
 
-        if not all_files:
-            return False, "NO FILES TO DELETE"
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    # Get relative path from repo root
+                    rel_path = os.path.relpath(file_path, repo_root)
+                    # Exclude this script itself
+                    if rel_path != os.path.relpath(__file__, repo_root):
+                        all_files.append(rel_path)
 
-        # Pick random file
-        file_to_delete = random.choice(all_files)
+            if not all_files:
+                return False, "NO FILES TO DELETE"
+
+            # Pick random file
+            file_to_delete = random.choice(all_files)
         full_path = os.path.join(repo_root, file_to_delete)
 
         # Delete the file
