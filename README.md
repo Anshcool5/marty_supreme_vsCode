@@ -53,14 +53,25 @@ npm run compile
 - **Marty Supreme: Hello World** - Test the extension
 - **Marty Supreme: Run Example Game** - Test Python integration with example game
 - **Marty Supreme: Run Pong 1950 (Hand Tracking)** - Launch hand-tracked Pong
+- **Marty Supreme: Run Fruit Slayer Ninja** - Launch Fruit Ninja-style hand-tracked game
 
 ## 🤖 Agent Mode (MCP)
 
-This repo includes a local MCP server for agent tooling in `mcp/` with 3 tools:
+This repo includes a local MCP server for agent tooling in `mcp/` with game lifecycle tools:
 
+<<<<<<< HEAD
+- `launch_pong(showPreview?: boolean)`, `pong_status()`, `stop_pong(force?: boolean)`
+- `launch_tetris()`, `tetris_status()`, `stop_tetris(force?: boolean)`
+- `launch_blackjack()`, `blackjack_status()`, `stop_blackjack(force?: boolean)`
+- `launch_slots()`, `slots_status()`, `stop_slots(force?: boolean)`
+=======
 - `launch_pong(showPreview?: boolean)`
 - `pong_status()`
 - `stop_pong(force?: boolean)`
+- `launch_ninja(showPreview?: boolean, cameraIndex?: number)`
+- `ninja_status()`
+- `stop_ninja(force?: boolean)`
+>>>>>>> adding-impossible-game
 
 Quick setup:
 

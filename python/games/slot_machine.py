@@ -103,6 +103,7 @@ class SlotMachineState:
     input_cooldown_until_ms: int = 0
     result_display_until_ms: int = 0
     game_over: bool = False
+    spin_sound_playing: bool = False
 
     # Bet adjustment tracking (for accelerating key hold)
     bet_key_hold_start_ms: int = 0
@@ -892,7 +893,13 @@ def can_trigger_spin(state: SlotMachineState, now_ms: int) -> bool:
     return True
 
 
-def start_spin(state: SlotMachineState, now_ms: int):
+def start_spin(
+    state: SlotMachineState,
+    now_ms: int,
+    spin_theme_sound: Optional[pygame.mixer.Sound] = None,
+    spin_sound_channel: Optional[pygame.mixer.Channel] = None,
+    play_spin_sound: bool = False,
+):
     """Start spinning the reels"""
     # In hardcore mode, auto-adjust bet and deduct
     if state.mode == GameMode.HARDCORE:
@@ -905,6 +912,19 @@ def start_spin(state: SlotMachineState, now_ms: int):
     state.spin_start_ms = now_ms
     state.total_spins += 1
     state.result_message = "SPINNING..."
+    if spin_sound_channel is not None:
+        try:
+            spin_sound_channel.stop()
+        except pygame.error:
+            pass
+    state.spin_sound_playing = False
+
+    if play_spin_sound and spin_theme_sound is not None and spin_sound_channel is not None:
+        try:
+            spin_sound_channel.play(spin_theme_sound, loops=0)
+            state.spin_sound_playing = True
+        except pygame.error:
+            pass
 
     # Randomize final symbols and set stop times
     for i, reel in enumerate(state.reels):
@@ -914,7 +934,13 @@ def start_spin(state: SlotMachineState, now_ms: int):
         reel.current_offset = 0.0
 
 
-def update_game(state: SlotMachineState, now_ms: int, audio_effects: Optional[GameAudioEffects] = None):
+def update_game(
+    state: SlotMachineState,
+    now_ms: int,
+    audio_effects: Optional[GameAudioEffects] = None,
+    jackpot_theme_sound: Optional[pygame.mixer.Sound] = None,
+    spin_sound_channel: Optional[pygame.mixer.Channel] = None,
+):
     """Update game logic each frame"""
     if state.phase == GamePhase.SPINNING:
         # Update each reel
@@ -939,19 +965,42 @@ def update_game(state: SlotMachineState, now_ms: int, audio_effects: Optional[Ga
 
         # Check if all stopped
         if all(r.state == ReelState.STOPPED for r in state.reels):
-            check_win(state, now_ms, audio_effects=audio_effects)
+            if state.spin_sound_playing and spin_sound_channel is not None:
+                try:
+                    spin_sound_channel.stop()
+                except pygame.error:
+                    pass
+                state.spin_sound_playing = False
+            check_win(
+                state,
+                now_ms,
+                audio_effects=audio_effects,
+                jackpot_theme_sound=jackpot_theme_sound,
+            )
 
     elif state.phase == GamePhase.RESULT_DISPLAY:
+        if state.spin_sound_playing and spin_sound_channel is not None:
+            try:
+                spin_sound_channel.stop()
+            except pygame.error:
+                pass
+            state.spin_sound_playing = False
         # Wait 2 seconds then return to idle
         if now_ms >= state.result_display_until_ms:
             state.phase = GamePhase.IDLE
             state.result_message = "Pull the lever!"
 
 
-def check_win(state: SlotMachineState, now_ms: int, audio_effects: Optional[GameAudioEffects] = None):
+def check_win(
+    state: SlotMachineState,
+    now_ms: int,
+    audio_effects: Optional[GameAudioEffects] = None,
+    jackpot_theme_sound: Optional[pygame.mixer.Sound] = None,
+):
     """Check for winning combinations and award points/credits"""
     symbols = [reel.final_symbol for reel in state.reels]
     is_win_result = False
+    is_jackpot_result = False
 
     if state.mode == GameMode.CASUAL:
         # Casual mode: Fixed score points
@@ -961,6 +1010,7 @@ def check_win(state: SlotMachineState, now_ms: int, audio_effects: Optional[Game
             state.jackpots += 1
             state.result_message = "🎰 JACKPOT! 777! +500 🎰"
             is_win_result = True
+            is_jackpot_result = True
 
         # 3 matching BARs
         elif symbols[0] == symbols[1] == symbols[2] == 'bar':
@@ -997,6 +1047,7 @@ def check_win(state: SlotMachineState, now_ms: int, audio_effects: Optional[Game
             state.jackpots += 1
             state.result_message = f"🎰 JACKPOT! 777! +{winnings} 🎰"
             is_win_result = True
+            is_jackpot_result = True
 
         # 3 matching BARs
         elif symbols[0] == symbols[1] == symbols[2] == 'bar':
@@ -1039,6 +1090,13 @@ def check_win(state: SlotMachineState, now_ms: int, audio_effects: Optional[Game
             audio_effects.play_win()
         else:
             audio_effects.play_lose()
+    if is_jackpot_result and jackpot_theme_sound is not None:
+        try:
+            channel = pygame.mixer.find_channel(force=True)
+            if channel is not None:
+                channel.play(jackpot_theme_sound)
+        except pygame.error:
+            pass
 
     state.phase = GamePhase.RESULT_DISPLAY
     state.result_display_until_ms = now_ms + 2000
@@ -1583,7 +1641,6 @@ def main():
     pygame.display.set_caption('Slot Machine 1950s Vegas')
     clock = pygame.time.Clock()
     audio_effects = GameAudioEffects()
-    audio_effects.play_boot()
     special_song_path = os.path.normpath(
         os.path.join(
             os.path.dirname(__file__),
@@ -1594,7 +1651,54 @@ def main():
             "trump_macarena.mp3",
         )
     )
-
+    spin_theme_path = os.path.normpath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "assets",
+            "audio_effects",
+            "themes",
+            "slot_machine_reels.mp3",
+        )
+    )
+    jackpot_theme_path = os.path.normpath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "assets",
+            "audio_effects",
+            "themes",
+            "slotmachine_jackpot.mp3",
+        )
+    )
+    spin_theme_sound: Optional[pygame.mixer.Sound] = None
+    jackpot_theme_sound: Optional[pygame.mixer.Sound] = None
+    spin_sound_channel: Optional[pygame.mixer.Channel] = None
+    try:
+        pygame.mixer.set_num_channels(16)
+        pygame.mixer.set_reserved(2)
+    except pygame.error:
+        pass
+    try:
+        spin_sound_channel = pygame.mixer.Channel(2)
+    except pygame.error:
+        spin_sound_channel = None
+    if os.path.exists(spin_theme_path):
+        try:
+            spin_theme_sound = pygame.mixer.Sound(spin_theme_path)
+            spin_theme_sound.set_volume(0.95)
+        except pygame.error as err:
+            print(f"Warning: failed to load spin theme sound: {err}")
+    else:
+        print(f"Warning: spin theme sound missing: {spin_theme_path}")
+    if os.path.exists(jackpot_theme_path):
+        try:
+            jackpot_theme_sound = pygame.mixer.Sound(jackpot_theme_path)
+            jackpot_theme_sound.set_volume(1.0)
+        except pygame.error as err:
+            print(f"Warning: failed to load jackpot theme sound: {err}")
+    else:
+        print(f"Warning: jackpot theme sound missing: {jackpot_theme_path}")
     # Initialize CV
     cam = cv2.VideoCapture(0)
     fist_detector = FistMotionDetector()
@@ -1604,6 +1708,7 @@ def main():
 
     # Game state
     state = SlotMachineState()
+    audio_effects.play_boot()
 
     # Main loop
     running = True
@@ -1650,7 +1755,13 @@ def main():
                 # Spacebar to spin (only when not in menu)
                 if event.key == pygame.K_SPACE and state.phase != GamePhase.MENU:
                     if can_trigger_spin(state, now_ms):
-                        start_spin(state, now_ms)
+                        start_spin(
+                            state,
+                            now_ms,
+                            spin_theme_sound=spin_theme_sound,
+                            spin_sound_channel=spin_sound_channel,
+                            play_spin_sound=False,
+                        )
                         state.input_cooldown_until_ms = now_ms + 2000
 
             # Mouse click handling
@@ -1765,7 +1876,13 @@ def main():
                     state.special_mode_active = False
 
                 if pull_detected and can_trigger_spin(state, now_ms):
-                    start_spin(state, now_ms)
+                    start_spin(
+                        state,
+                        now_ms,
+                        spin_theme_sound=spin_theme_sound,
+                        spin_sound_channel=spin_sound_channel,
+                        play_spin_sound=True,
+                    )
                     state.input_cooldown_until_ms = now_ms + 2000
 
                 # Show appropriate stats based on mode
@@ -1779,6 +1896,7 @@ def main():
                 status_text = "READY" if can_trigger_spin(state, now_ms) else "COOLDOWN"
                 if state.game_over:
                     status_text = "GAME OVER"
+
                 cv2.putText(frame, f"Status: {status_text}",
                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0) if status_text == "READY" else (100, 100, 255), 2)
                 cv2.putText(frame, "Pull fist down to spin!",
@@ -1854,7 +1972,13 @@ def main():
                     break
 
         # Update game state
-        update_game(state, now_ms, audio_effects=audio_effects)
+        update_game(
+            state,
+            now_ms,
+            audio_effects=audio_effects,
+            jackpot_theme_sound=jackpot_theme_sound,
+            spin_sound_channel=spin_sound_channel,
+        )
 
         # Render and store menu boxes if in menu phase
         menu_boxes = render_game(screen, state, symbol_images)

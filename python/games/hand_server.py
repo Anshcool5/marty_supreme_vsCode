@@ -7,6 +7,7 @@ Also supports standalone 1950s-themed Pong via --run-pong.
 import argparse
 import asyncio
 import json
+import os
 import random
 import sys
 from dataclasses import dataclass
@@ -317,6 +318,46 @@ class MartySupremePong1950:
         self.match_over = False
         self.match_result = ""
         self.audio_effects = None
+        self.paddle_hit_sound = None
+        self.wall_bounce_sound = None
+        self.missed_shot_sound = None
+
+    def _play_theme_sound(self, sound: "pygame.mixer.Sound | None") -> None:
+        if sound is None:
+            return
+        try:
+            channel = pygame.mixer.find_channel(force=True)
+            if channel is not None:
+                channel.play(sound)
+        except pygame.error:
+            pass
+
+    def _load_theme_sounds(self) -> None:
+        themes_dir = os.path.normpath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "assets",
+                "audio_effects",
+                "themes",
+            )
+        )
+        sounds = {
+            "paddle_hit_sound": "paddle_sound.mp3",
+            "wall_bounce_sound": "ball_sound.mp3",
+            "missed_shot_sound": "missed_shot.mp3",
+        }
+        for attr, filename in sounds.items():
+            sound_path = os.path.join(themes_dir, filename)
+            if not os.path.exists(sound_path):
+                print(f"Warning: Pong theme sound missing: {sound_path}")
+                continue
+            try:
+                loaded = pygame.mixer.Sound(sound_path)
+                loaded.set_volume(1.0)
+                setattr(self, attr, loaded)
+            except pygame.error as err:
+                print(f"Warning: failed to load Pong theme sound ({filename}): {err}")
 
     def _reset_ball(self, direction: int) -> None:
         self.ball_x = self.WIDTH / 2
@@ -369,9 +410,11 @@ class MartySupremePong1950:
         if self.ball_y <= self.PLAY_TOP:
             self.ball_y = self.PLAY_TOP
             self.ball_vy = abs(self.ball_vy)
+            self._play_theme_sound(self.wall_bounce_sound)
         elif self.ball_y >= play_bottom - self.BALL_SIZE:
             self.ball_y = play_bottom - self.BALL_SIZE
             self.ball_vy *= -1
+            self._play_theme_sound(self.wall_bounce_sound)
 
         left_paddle_x = self.MARGIN
         if (
@@ -383,6 +426,7 @@ class MartySupremePong1950:
             self.ball_vx = abs(self.ball_vx) + 0.18
             offset = (self.ball_y - (self.left_y + self.PADDLE_H / 2)) / (self.PADDLE_H / 2)
             self.ball_vy = offset * 4.0
+            self._play_theme_sound(self.paddle_hit_sound)
 
         right_paddle_x = self.WIDTH - self.MARGIN - self.PADDLE_W
         if (
@@ -394,9 +438,11 @@ class MartySupremePong1950:
             self.ball_vx = -abs(self.ball_vx) - 0.18
             offset = (self.ball_y - (self.right_y + self.PADDLE_H / 2)) / (self.PADDLE_H / 2)
             self.ball_vy = offset * 4.0
+            self._play_theme_sound(self.paddle_hit_sound)
 
         if self.ball_x < -20:
             self.right_score += 1
+            self._play_theme_sound(self.missed_shot_sound)
             if self.right_score >= self.WIN_SCORE:
                 self._finish_match("lose")
             else:
@@ -404,6 +450,7 @@ class MartySupremePong1950:
 
         if self.ball_x > self.WIDTH + 20:
             self.left_score += 1
+            self._play_theme_sound(self.missed_shot_sound)
             if self.left_score >= self.WIN_SCORE:
                 self._finish_match("win")
             else:
@@ -493,6 +540,7 @@ class MartySupremePong1950:
 
         self.audio_effects = GameAudioEffects()
         self.audio_effects.play_boot()
+        self._load_theme_sounds()
 
         running = True
         self._reset_ball(direction=random.choice([-1, 1]))
