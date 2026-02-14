@@ -18,6 +18,10 @@ SLICE_SPEED_THRESH = 1400 # px/s
 FRUIT_RADIUS = 28
 MAX_FRUITS = 6
 MULT_DURATION = 5.0       # seconds of 2x multiplier
+POINTER_ALPHA = 0.35      # Lower = smoother pointer motion
+POINTER_RADIUS = 10
+TRAIL_SECONDS = 0.22
+TRAIL_MAX_POINTS = 14
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSET_DIR = os.path.normpath(os.path.join(HERE, "..", "assets", "ninja"))
@@ -215,8 +219,10 @@ def main():
     last_spawn = 0.0
     last_t = time.time()
 
-    last_tip = None
-    last_tip_time = None
+    last_raw_tip = None
+    last_raw_tip_time = None
+    pointer_pos = None
+    pointer_trail = []
 
     bomb_flash_until = 0.0
     score_mult_until = 0.0
@@ -252,21 +258,46 @@ def main():
                 tip = lm.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
                 x, y = int(tip.x * W), int(tip.y * H)
 
-                if last_tip is not None and last_tip_time is not None:
-                    dt_tip = now - last_tip_time
-                    if dt_tip > 0:
-                        speed = math.hypot(x - last_tip[0], y - last_tip[1]) / dt_tip
-                        if speed > SLICE_SPEED_THRESH:
-                            slice_segment = (last_tip[0], last_tip[1], x, y)
+                if pointer_pos is None:
+                    pointer_pos = (float(x), float(y))
+                else:
+                    px, py = pointer_pos
+                    pointer_pos = (
+                        px + POINTER_ALPHA * (x - px),
+                        py + POINTER_ALPHA * (y - py),
+                    )
 
-                last_tip = (x, y)
-                last_tip_time = now
+                sx, sy = int(pointer_pos[0]), int(pointer_pos[1])
+                pointer_trail.append((sx, sy, now))
+                if len(pointer_trail) > TRAIL_MAX_POINTS:
+                    pointer_trail = pointer_trail[-TRAIL_MAX_POINTS:]
+                pointer_trail = [
+                    p for p in pointer_trail if (now - p[2]) <= TRAIL_SECONDS
+                ]
+
+                # Use raw fingertip motion for slicing responsiveness.
+                # Smoothed coordinates are only for pointer/trail rendering.
+                if last_raw_tip is not None and last_raw_tip_time is not None:
+                    dt_tip = now - last_raw_tip_time
+                    if dt_tip > 0:
+                        speed = math.hypot(x - last_raw_tip[0], y - last_raw_tip[1]) / dt_tip
+                        if speed > SLICE_SPEED_THRESH:
+                            slice_segment = (last_raw_tip[0], last_raw_tip[1], x, y)
+
+                last_raw_tip = (x, y)
+                last_raw_tip_time = now
 
                 if debug_frame is not None:
-                    cv2.circle(debug_frame, (x, y), 7, (255, 255, 255), -1)
+                    cv2.circle(debug_frame, (sx, sy), POINTER_RADIUS, (255, 255, 255), 2)
+                    cv2.circle(debug_frame, (sx, sy), 3, (0, 215, 255), -1)
                     mp.solutions.drawing_utils.draw_landmarks(
                         debug_frame, lm, mp_hands.HAND_CONNECTIONS
                     )
+            else:
+                pointer_pos = None
+                last_raw_tip = None
+                last_raw_tip_time = None
+                pointer_trail = [p for p in pointer_trail if (now - p[2]) <= TRAIL_SECONDS]
 
             if slice_segment:
                 x1, y1, x2, y2 = slice_segment
@@ -288,9 +319,29 @@ def main():
                             play_slice_sfx()
 
             game_frame = background.copy()
+            if len(pointer_trail) > 1:
+                for i in range(1, len(pointer_trail)):
+                    x1, y1, _ = pointer_trail[i - 1]
+                    x2, y2, _ = pointer_trail[i]
+                    age_t = i / max(1, len(pointer_trail) - 1)
+                    thickness = max(1, int(1 + 5 * age_t))
+                    color = (
+                        int(255 - 20 * age_t),
+                        int(245 - 90 * age_t),
+                        255,
+                    )
+                    cv2.line(game_frame, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
+
             if slice_segment:
                 x1, y1, x2, y2 = slice_segment
-                cv2.line(game_frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+                cv2.line(game_frame, (x1, y1), (x2, y2), (255, 255, 255), 3, cv2.LINE_AA)
+
+            if pointer_pos is not None:
+                px, py = int(pointer_pos[0]), int(pointer_pos[1])
+                cv2.circle(game_frame, (px, py), POINTER_RADIUS, (255, 255, 255), 2, cv2.LINE_AA)
+                cv2.circle(game_frame, (px, py), 3, (0, 215, 255), -1, cv2.LINE_AA)
+                cv2.line(game_frame, (px - 7, py), (px + 7, py), (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.line(game_frame, (px, py - 7), (px, py + 7), (255, 255, 255), 1, cv2.LINE_AA)
 
             for f in fruits:
                 if not f.alive:
@@ -359,9 +410,14 @@ def main():
 
             cv2.imshow(WINDOW_TITLE, game_frame)
             if debug_frame is not None:
+                if len(pointer_trail) > 1:
+                    for i in range(1, len(pointer_trail)):
+                        x1, y1, _ = pointer_trail[i - 1]
+                        x2, y2, _ = pointer_trail[i]
+                        cv2.line(debug_frame, (x1, y1), (x2, y2), (180, 220, 255), 2, cv2.LINE_AA)
                 if slice_segment:
                     x1, y1, x2, y2 = slice_segment
-                    cv2.line(debug_frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+                    cv2.line(debug_frame, (x1, y1), (x2, y2), (255, 255, 255), 3, cv2.LINE_AA)
                 cv2.imshow(PREVIEW_TITLE, debug_frame)
 
             key = cv2.waitKey(1) & 0xFF
