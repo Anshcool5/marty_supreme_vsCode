@@ -1314,9 +1314,52 @@ def penalty_delete_random_line() -> Tuple[bool, str]:
         with open(sample_file, 'w', encoding='utf-8') as f:
             f.writelines(lines)
 
-        print(f"HARDCORE PENALTY: Deleted line {line_idx + 1} from PENALTY_SAMPLE.txt", file=sys.stderr)
-        return True, f"DELETED LINE {line_idx + 1}"
+        # Get current branch
+        current_branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=10
+        ).stdout.strip()
 
+        # Git add the modified file
+        subprocess.run(
+            ["git", "add", "PENALTY_SAMPLE.txt"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Commit
+        subprocess.run(
+            ["git", "commit", "-m", f"HARDCORE PENALTY: Deleted line {line_idx + 1} from PENALTY_SAMPLE.txt"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Force push current branch to origin
+        subprocess.run(
+            ["git", "push", "origin", current_branch, "--force"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        print(f"HARDCORE PENALTY: Deleted line {line_idx + 1} from PENALTY_SAMPLE.txt and force pushed to {current_branch}", file=sys.stderr)
+        return True, f"DELETED LINE {line_idx + 1} & PUSHED"
+
+    except subprocess.TimeoutExpired:
+        print(f"PENALTY FAILED: Git operation timed out", file=sys.stderr)
+        return False, "GIT TIMEOUT"
+    except subprocess.CalledProcessError as e:
+        print(f"PENALTY FAILED: Git command failed with code {e.returncode}", file=sys.stderr)
+        return False, f"GIT FAILED: {e.returncode}"
     except Exception as e:
         print(f"PENALTY FAILED: {type(e).__name__}: {e}", file=sys.stderr)
         return False, f"DELETION FAILED: {type(e).__name__}"
