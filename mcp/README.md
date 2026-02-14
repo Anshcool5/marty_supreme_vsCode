@@ -1,10 +1,11 @@
 # Marty Supreme MCP Server
 
-MCP server that exposes agent tools for Pong lifecycle control:
+MCP server that exposes agent tools for game lifecycle control:
 
-- `launch_pong(showPreview?: boolean)`
-- `pong_status()`
-- `stop_pong(force?: boolean)`
+- `launch_pong(showPreview?: boolean)`, `pong_status()`, `stop_pong(force?: boolean)`
+- `launch_tetris()`, `tetris_status()`, `stop_tetris(force?: boolean)`
+- `launch_blackjack()`, `blackjack_status()`, `stop_blackjack(force?: boolean)`
+- `launch_slots()`, `slots_status()`, `stop_slots(force?: boolean)`
 
 This is additive to the VS Code extension command/chat flows. It does not replace:
 
@@ -46,7 +47,7 @@ Use the sample config in `mcp/codex.mcp.example.json` and point your client to r
 - `node`
 - args: `["/absolute/path/to/marty_supreme_vsCode/mcp/dist/server.js"]`
 
-Set approvals to prompt for mutating tools (`launch_pong`, `stop_pong`) and allow `pong_status` without prompt if your client supports per-tool policies.
+Set approvals to prompt for mutating tools (`launch_*`, `stop_*`) and allow `*_status` tools without prompt if your client supports per-tool policies.
 
 ## Tool Contracts
 
@@ -92,6 +93,48 @@ Output:
 { "status": "stopped|not_running|error", "message": "string" }
 ```
 
+### `launch_tetris` / `launch_blackjack` / `launch_slots`
+
+Input:
+
+```json
+{}
+```
+
+Output:
+
+```json
+{ "status": "launched|already_running|error", "message": "string", "pid": 12345 }
+```
+
+### `tetris_status` / `blackjack_status` / `slots_status`
+
+Input:
+
+```json
+{}
+```
+
+Output:
+
+```json
+{ "status": "running|not_running", "pid": 12345 }
+```
+
+### `stop_tetris` / `stop_blackjack` / `stop_slots`
+
+Input:
+
+```json
+{ "force": false }
+```
+
+Output:
+
+```json
+{ "status": "stopped|not_running|error", "message": "string" }
+```
+
 ## Troubleshooting
 
 - Camera permission denied:
@@ -101,6 +144,6 @@ Output:
 - Script not found:
   - Verify `python/games/hand_server.py` exists in this repo.
 - Tool returns `already_running`:
-  - Use `pong_status` and `stop_pong` to manage lifecycle.
+  - Use `<game>_status` and `stop_<game>` to manage lifecycle.
 
 Server logs are written to `stderr` with the prefix `[marty-mcp]`.
