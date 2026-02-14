@@ -36,9 +36,20 @@ type StopResult = StopPongResult;
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(currentDir, "..", "..");
 const pongScriptPath = path.join(repoRoot, "python", "games", "hand_server.py");
+const ninjaScriptPath = path.join(repoRoot, "python", "games", "ninja.py");
 const tetrisScriptPath = path.join(repoRoot, "python", "games", "tetris.py");
-const blackjackScriptPath = path.join(repoRoot, "python", "games", "blackjack.py");
-const slotsScriptPath = path.join(repoRoot, "python", "games", "slot_machine.py");
+const blackjackScriptPath = path.join(
+  repoRoot,
+  "python",
+  "games",
+  "blackjack.py"
+);
+const slotsScriptPath = path.join(
+  repoRoot,
+  "python",
+  "games",
+  "slot_machine.py"
+);
 const venvPythonPath = path.join(repoRoot, "python", "venv", "bin", "python");
 
 const activeProcesses: Record<GameId, ChildProcess | null> = {
@@ -74,6 +85,7 @@ const gameConfigs: Record<
     scriptPath: slotsScriptPath,
   },
 };
+let activeNinjaProcess: ChildProcess | null = null;
 
 const server = new Server(
   {
@@ -91,7 +103,9 @@ function log(message: string): void {
   console.error(`[marty-mcp] ${message}`);
 }
 
-function isProcessRunning(process: ChildProcess | null): process is ChildProcess {
+function isProcessRunning(
+  process: ChildProcess | null
+): process is ChildProcess {
   return Boolean(process && process.exitCode === null && !process.killed);
 }
 
@@ -332,6 +346,107 @@ function stopGame(gameId: GameId, force: boolean): StopResult {
   };
 }
 
+async function launchNinja(
+  showPreview: boolean,
+  cameraIndex: number
+): Promise<LaunchPongResult> {
+  if (isProcessRunning(activeNinjaProcess)) {
+    return {
+      status: "already_running",
+      message: "Ninja is already running.",
+      pid: activeNinjaProcess.pid,
+    };
+  }
+
+  if (!(await fileExists(ninjaScriptPath))) {
+    return {
+      status: "error",
+      message: `Ninja script not found at ${ninjaScriptPath}`,
+    };
+  }
+
+  const pythonExecutable = await resolvePythonExecutable();
+  const args = [ninjaScriptPath, "--camera-index", String(cameraIndex)];
+  if (showPreview) {
+    args.push("--show-preview");
+  }
+
+  try {
+    const child = spawn(pythonExecutable, args, {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    child.stdout?.on("data", (data: Buffer) => {
+      log(`ninja stdout: ${data.toString().trim()}`);
+    });
+    child.stderr?.on("data", (data: Buffer) => {
+      log(`ninja stderr: ${data.toString().trim()}`);
+    });
+    child.on("error", (error) => {
+      log(`ninja process error: ${error.message}`);
+    });
+    child.on("exit", (code, signal) => {
+      log(`ninja exited with code=${code} signal=${signal}`);
+      activeNinjaProcess = null;
+    });
+
+    activeNinjaProcess = child;
+    log(
+      `launch_ninja -> python="${pythonExecutable}" pid=${
+        child.pid ?? "unknown"
+      } showPreview=${showPreview} cameraIndex=${cameraIndex}`
+    );
+
+    return {
+      status: "launched",
+      message: "Ninja launched successfully.",
+      pid: child.pid,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown launch error";
+    log(`launch_ninja failed: ${message}`);
+    return {
+      status: "error",
+      message: `Failed to launch Ninja: ${message}`,
+    };
+  }
+}
+
+function ninjaStatus(): PongStatusResult {
+  if (isProcessRunning(activeNinjaProcess)) {
+    return { status: "running", pid: activeNinjaProcess.pid };
+  }
+  return { status: "not_running" };
+}
+
+function stopNinja(force: boolean): StopPongResult {
+  if (!isProcessRunning(activeNinjaProcess)) {
+    return {
+      status: "not_running",
+      message: "Ninja is not running.",
+    };
+  }
+
+  const signal = force ? "SIGKILL" : "SIGTERM";
+  const stopped = activeNinjaProcess.kill(signal);
+  log(`stop_ninja -> signal=${signal} success=${stopped}`);
+
+  if (!stopped) {
+    return {
+      status: "error",
+      message: "Failed to signal Ninja process.",
+    };
+  }
+
+  return {
+    status: "stopped",
+    message: `Ninja stop signal sent (${signal}).`,
+  };
+}
+
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
@@ -481,6 +596,52 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           additionalProperties: false,
         },
       },
+      {
+        name: "launch_ninja",
+        description:
+          "Launch Marty Supreme Fruit Slayer Ninja if not already running. Returns launch status and pid when available.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            showPreview: {
+              type: "boolean",
+              description:
+                "Whether to show the debug camera preview window. Defaults to false.",
+            },
+            cameraIndex: {
+              type: "number",
+              description:
+                "Camera index passed to ninja.py --camera-index. Defaults to 0.",
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "ninja_status",
+        description: "Get current Ninja process status and pid.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "stop_ninja",
+        description:
+          "Stop the currently running Ninja process, if any. Optional force flag sends SIGKILL.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            force: {
+              type: "boolean",
+              description:
+                "When true, sends SIGKILL instead of SIGTERM. Defaults to false.",
+            },
+          },
+          additionalProperties: false,
+        },
+      },
     ],
   };
 });
@@ -543,6 +704,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
       const result = stopGame("slots", force);
       return toolResponse(result, result.status === "error");
     }
+    case "launch_ninja": {
+      const showPreview = parseBooleanArg(args?.showPreview, false);
+      const cameraIndex =
+        typeof args?.cameraIndex === "number"
+          ? Math.max(0, Math.floor(args.cameraIndex))
+          : 0;
+      const result = await launchNinja(showPreview, cameraIndex);
+      return toolResponse(result, result.status === "error");
+    }
+    case "ninja_status": {
+      const result = ninjaStatus();
+      return toolResponse(result);
+    }
+    case "stop_ninja": {
+      const force = parseBooleanArg(args?.force, false);
+      const result = stopNinja(force);
+      return toolResponse(result, result.status === "error");
+    }
     default:
       throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
   }
@@ -561,6 +740,9 @@ process.on("SIGINT", () => {
       activeProcess.kill("SIGTERM");
     }
   });
+  if (isProcessRunning(activeNinjaProcess)) {
+    activeNinjaProcess.kill("SIGTERM");
+  }
   process.exit(0);
 });
 
@@ -571,6 +753,9 @@ process.on("SIGTERM", () => {
       activeProcess.kill("SIGTERM");
     }
   });
+  if (isProcessRunning(activeNinjaProcess)) {
+    activeNinjaProcess.kill("SIGTERM");
+  }
   process.exit(0);
 });
 

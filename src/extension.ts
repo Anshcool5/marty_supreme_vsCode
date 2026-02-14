@@ -297,6 +297,43 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  // Register Ninja game command
+  const ninjaGameCommand = vscode.commands.registerCommand(
+    "marty-supreme.runNinja",
+    async () => {
+      outputChannel.show();
+      outputChannel.appendLine("Starting Fruit Slayer Ninja...");
+
+      try {
+        const gameScriptPath = path.join(
+          context.extensionPath,
+          "python",
+          "games",
+          "ninja.py"
+        );
+
+        const process = await pythonManager.spawn(gameScriptPath);
+
+        if (process) {
+          outputChannel.appendLine("Fruit Slayer Ninja started successfully!");
+          vscode.window.showInformationMessage(
+            "Marty Supreme: Fruit Slayer Ninja is running!"
+          );
+
+          process.on("exit", (code) => {
+            outputChannel.appendLine(`Ninja process exited with code ${code}`);
+            vscode.window.showInformationMessage("Fruit Slayer Ninja ended.");
+          });
+        }
+      } catch (error) {
+        const errorMsg =
+          error instanceof Error ? error.message : "Unknown error occurred";
+        outputChannel.appendLine(`Error: ${errorMsg}`);
+        vscode.window.showErrorMessage(`Failed to start Ninja: ${errorMsg}`);
+      }
+    }
+  );
+
   // Add commands to subscriptions
   context.subscriptions.push(helloCommand);
   context.subscriptions.push(exampleGameCommand);
@@ -311,6 +348,7 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
   context.subscriptions.push(slotMachineGameCommand);
+  context.subscriptions.push(ninjaGameCommand);
   context.subscriptions.push(outputChannel);
 
   // Show welcome message

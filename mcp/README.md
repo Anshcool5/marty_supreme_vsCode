@@ -2,10 +2,19 @@
 
 MCP server that exposes agent tools for game lifecycle control:
 
+<<<<<<< HEAD
 - `launch_pong(showPreview?: boolean)`, `pong_status()`, `stop_pong(force?: boolean)`
 - `launch_tetris()`, `tetris_status()`, `stop_tetris(force?: boolean)`
 - `launch_blackjack()`, `blackjack_status()`, `stop_blackjack(force?: boolean)`
 - `launch_slots()`, `slots_status()`, `stop_slots(force?: boolean)`
+=======
+- `launch_pong(showPreview?: boolean)`
+- `pong_status()`
+- `stop_pong(force?: boolean)`
+- `launch_ninja(showPreview?: boolean, cameraIndex?: number)`
+- `ninja_status()`
+- `stop_ninja(force?: boolean)`
+>>>>>>> adding-impossible-game
 
 This is additive to the VS Code extension command/chat flows. It does not replace:
 
@@ -47,7 +56,11 @@ Use the sample config in `mcp/codex.mcp.example.json` and point your client to r
 - `node`
 - args: `["/absolute/path/to/marty_supreme_vsCode/mcp/dist/server.js"]`
 
+<<<<<<< HEAD
 Set approvals to prompt for mutating tools (`launch_*`, `stop_*`) and allow `*_status` tools without prompt if your client supports per-tool policies.
+=======
+Set approvals to prompt for mutating tools (`launch_*`, `stop_*`) and allow status tools without prompt if your client supports per-tool policies.
+>>>>>>> adding-impossible-game
 
 ## Tool Contracts
 
@@ -93,12 +106,20 @@ Output:
 { "status": "stopped|not_running|error", "message": "string" }
 ```
 
+<<<<<<< HEAD
 ### `launch_tetris` / `launch_blackjack` / `launch_slots`
+=======
+### `launch_ninja`
+>>>>>>> adding-impossible-game
 
 Input:
 
 ```json
+<<<<<<< HEAD
 {}
+=======
+{ "showPreview": false, "cameraIndex": 0 }
+>>>>>>> adding-impossible-game
 ```
 
 Output:
@@ -107,7 +128,11 @@ Output:
 { "status": "launched|already_running|error", "message": "string", "pid": 12345 }
 ```
 
+<<<<<<< HEAD
 ### `tetris_status` / `blackjack_status` / `slots_status`
+=======
+### `ninja_status`
+>>>>>>> adding-impossible-game
 
 Input:
 
@@ -121,7 +146,11 @@ Output:
 { "status": "running|not_running", "pid": 12345 }
 ```
 
+<<<<<<< HEAD
 ### `stop_tetris` / `stop_blackjack` / `stop_slots`
+=======
+### `stop_ninja`
+>>>>>>> adding-impossible-game
 
 Input:
 
@@ -143,7 +172,13 @@ Output:
   - Install from your project venv.
 - Script not found:
   - Verify `python/games/hand_server.py` exists in this repo.
+- Ninja script not found:
+  - Verify `python/games/ninja.py` exists in this repo.
 - Tool returns `already_running`:
+<<<<<<< HEAD
   - Use `<game>_status` and `stop_<game>` to manage lifecycle.
+=======
+  - Use `*_status` and `stop_*` to manage lifecycle.
+>>>>>>> adding-impossible-game
 
 Server logs are written to `stderr` with the prefix `[marty-mcp]`.
