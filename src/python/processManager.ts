@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { spawn, ChildProcess } from 'child_process';
 import * as readline from 'readline';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class PythonProcessManager {
   private processes: Map<string, ChildProcess> = new Map();
@@ -15,8 +17,21 @@ export class PythonProcessManager {
    * Find Python executable in system
    */
   private async findPythonExecutable(): Promise<string> {
+    // Prefer the workspace venv interpreter so installed game deps (e.g. OpenCV) are available.
+    const venvCandidates = [
+      path.join(this.context.extensionPath, 'python', 'venv', 'bin', 'python'),
+      path.join(this.context.extensionPath, 'python', 'venv', 'Scripts', 'python.exe'),
+    ];
+    const pythonCommands: string[] = [];
+
+    for (const candidate of venvCandidates) {
+      if (fs.existsSync(candidate)) {
+        pythonCommands.push(candidate);
+      }
+    }
+
     // Try common Python commands
-    const pythonCommands = ['python3', 'python', 'py'];
+    pythonCommands.push('python3', 'python', 'py');
 
     for (const cmd of pythonCommands) {
       try {
