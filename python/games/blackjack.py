@@ -43,7 +43,7 @@ SUIT_TO_ASSET = {
     "D": "diamonds",
     "C": "clubs",
 }
-DECK_ORIGIN = (WINDOW_WIDTH - 150, 290)
+DECK_ORIGIN = (WINDOW_WIDTH - 150, 200)
 ANIM_DURATION_MS = 260
 ANIM_STAGGER_MS = 110
 
@@ -59,7 +59,13 @@ BUTTON_HOVER = (128, 82, 40)
 BUTTON_DISABLED = (72, 72, 72)
 
 
+class GameMode(str, Enum):
+    NORMAL = "normal"
+    HARDCORE = "hardcore"
+
+
 class Phase(str, Enum):
+    MODE_SELECT = "MODE_SELECT"
     BETTING = "BETTING"
     PLAYER_TURN = "PLAYER_TURN"
     DEALER_TURN = "DEALER_TURN"
@@ -157,11 +163,12 @@ class VisualCard:
 @dataclass
 class GameState:
     bankroll: int
+    mode: Optional[GameMode] = None
     min_bet: int = MIN_BET
     current_bet: int = MIN_BET
-    phase: Phase = Phase.BETTING
+    phase: Phase = Phase.MODE_SELECT
     round_result: RoundResult = RoundResult.NONE
-    message: str = "Place your bet and click Deal."
+    message: str = "Choose mode to start."
     wins: int = 0
     losses: int = 0
     pushes: int = 0
@@ -171,6 +178,7 @@ class GameState:
     dealer_visual_cards: List[VisualCard] = field(default_factory=list)
     deck: Deck = field(default_factory=Deck)
     can_start_new_round: bool = True
+    rounds_completed: int = 0
 
     def reset_for_next_round(self) -> None:
         self.player_hand = Hand()
@@ -178,6 +186,12 @@ class GameState:
         self.player_visual_cards = []
         self.dealer_visual_cards = []
         self.round_result = RoundResult.NONE
+        if self.mode == GameMode.HARDCORE:
+            self.phase = Phase.PLAYER_TURN
+            self.message = "Hardcore: camera controls only. Show fist=Hit, palm=Stand."
+            self.can_start_new_round = True
+            return
+
         self.phase = Phase.BETTING
         self.message = "Place your bet and click Deal."
         self.can_start_new_round = self.bankroll >= self.min_bet
@@ -250,7 +264,7 @@ def load_card_images(base_dir: str) -> Dict[str, pygame.Surface]:
 
 
 class GestureController:
-    def __init__(self) -> None:
+    def __init__(self, active: bool) -> None:
         self.enabled = False
         self.cap = None
         self.hands = None
@@ -265,6 +279,9 @@ class GestureController:
         self.gesture_stability = {"hit": 0, "stand": 0}
         self.stability_threshold = 3
         self.current_gesture = "INITIALIZING"
+
+        if not active:
+            return
 
         if not CV_AVAILABLE:
             return
@@ -466,7 +483,7 @@ class GestureController:
 
 def hand_anchor(owner: str) -> Tuple[int, int]:
     if owner == "dealer":
-        return 40, 170
+        return 40, 200
     return 40, 430
 
 
@@ -517,7 +534,55 @@ def deal_initial_cards(state: GameState, now_ms: int) -> None:
     add_visual_card(state, "dealer", card, now_ms, delay_ms=ANIM_STAGGER_MS * 3)
 
 
-def settle_round(state: GameState, result: RoundResult) -> None:
+def start_hardcore_round(state: GameState, now_ms: int) -> None:
+    state.player_hand = Hand()
+    state.dealer_hand = Hand()
+    state.player_visual_cards = []
+    state.dealer_visual_cards = []
+    state.round_result = RoundResult.NONE
+    state.phase = Phase.PLAYER_TURN
+    state.message = "Hardcore: camera controls only. Show fist=Hit, palm=Stand."
+
+    while True:
+        deal_initial_cards(state, now_ms=now_ms)
+        player_bj = state.player_hand.is_blackjack()
+        dealer_bj = state.dealer_hand.is_blackjack()
+        if player_bj and dealer_bj:
+            state.pushes += 1
+            state.message = "Hardcore push on deal. Redealing..."
+            continue
+        if player_bj:
+            settle_round(state, RoundResult.BLACKJACK_WIN, now_ms=now_ms)
+        elif dealer_bj:
+            settle_round(state, RoundResult.LOSE, now_ms=now_ms)
+        else:
+            state.message = "Hardcore: camera controls only. Show fist=Hit, palm=Stand."
+        return
+
+
+def settle_round(state: GameState, result: RoundResult, now_ms: int) -> None:
+    if state.mode == GameMode.HARDCORE:
+        if result == RoundResult.PUSH:
+            state.pushes += 1
+            state.message = "Hardcore push. Redealing..."
+            start_hardcore_round(state, now_ms=now_ms)
+            return
+
+        state.round_result = result
+        state.phase = Phase.ROUND_END
+        state.rounds_completed += 1
+        if result == RoundResult.BLACKJACK_WIN:
+            state.wins += 1
+            state.message = "Hardcore clear: BLACKJACK."
+        elif result == RoundResult.WIN:
+            state.wins += 1
+            state.message = "Hardcore clear: You win."
+        else:
+            state.losses += 1
+            state.message = "Hardcore failed: Dealer wins."
+        state.can_start_new_round = True
+        return
+
     bet = state.current_bet
     state.round_result = result
     state.phase = Phase.ROUND_END
@@ -547,13 +612,13 @@ def resolve_natural_blackjacks(state: GameState) -> bool:
     player_bj = state.player_hand.is_blackjack()
     dealer_bj = state.dealer_hand.is_blackjack()
     if player_bj and dealer_bj:
-        settle_round(state, RoundResult.PUSH)
+        settle_round(state, RoundResult.PUSH, now_ms=pygame.time.get_ticks())
         return True
     if player_bj:
-        settle_round(state, RoundResult.BLACKJACK_WIN)
+        settle_round(state, RoundResult.BLACKJACK_WIN, now_ms=pygame.time.get_ticks())
         return True
     if dealer_bj:
-        settle_round(state, RoundResult.LOSE)
+        settle_round(state, RoundResult.LOSE, now_ms=pygame.time.get_ticks())
         return True
     return False
 
@@ -582,17 +647,17 @@ def compare_hands(state: GameState) -> None:
     player_total, _ = state.player_hand.value()
     dealer_total, _ = state.dealer_hand.value()
     if player_total > 21:
-        settle_round(state, RoundResult.LOSE)
+        settle_round(state, RoundResult.LOSE, now_ms=pygame.time.get_ticks())
         return
     if dealer_total > 21:
-        settle_round(state, RoundResult.WIN)
+        settle_round(state, RoundResult.WIN, now_ms=pygame.time.get_ticks())
         return
     if player_total > dealer_total:
-        settle_round(state, RoundResult.WIN)
+        settle_round(state, RoundResult.WIN, now_ms=pygame.time.get_ticks())
     elif player_total < dealer_total:
-        settle_round(state, RoundResult.LOSE)
+        settle_round(state, RoundResult.LOSE, now_ms=pygame.time.get_ticks())
     else:
-        settle_round(state, RoundResult.PUSH)
+        settle_round(state, RoundResult.PUSH, now_ms=pygame.time.get_ticks())
 
 
 def draw_background(surface: pygame.Surface) -> None:
@@ -635,18 +700,23 @@ def draw_cards(
 
 def build_buttons(state: GameState) -> Dict[str, Button]:
     buttons: Dict[str, Button] = {}
-    if state.phase == Phase.BETTING:
+    if state.phase == Phase.MODE_SELECT:
+        buttons["normal_mode"] = Button(pygame.Rect(170, 548, 220, 56), "Normal")
+        buttons["hardcore_mode"] = Button(pygame.Rect(430, 548, 220, 56), "Hardcore")
+        buttons["quit"] = Button(pygame.Rect(690, 548, 140, 56), "Quit")
+    elif state.mode == GameMode.NORMAL and state.phase == Phase.BETTING:
         buttons["dec"] = Button(pygame.Rect(80, 600, 120, 48), "- Bet")
         buttons["inc"] = Button(pygame.Rect(220, 600, 120, 48), "+ Bet")
         buttons["deal"] = Button(pygame.Rect(360, 600, 140, 48), "Deal")
         buttons["dec"].enabled = state.current_bet > state.min_bet
         buttons["inc"].enabled = state.current_bet + BET_STEP <= state.max_bet
         buttons["deal"].enabled = state.current_bet <= state.max_bet and state.max_bet >= state.min_bet
-    elif state.phase == Phase.PLAYER_TURN:
+    elif state.phase == Phase.PLAYER_TURN and state.mode == GameMode.NORMAL:
         buttons["hit"] = Button(pygame.Rect(80, 600, 140, 48), "Hit")
         buttons["stand"] = Button(pygame.Rect(240, 600, 140, 48), "Stand")
     elif state.phase == Phase.ROUND_END:
-        buttons["next"] = Button(pygame.Rect(80, 600, 190, 48), "Next Round")
+        next_label = "Play Again" if state.mode == GameMode.HARDCORE else "Next Round"
+        buttons["next"] = Button(pygame.Rect(80, 600, 190, 48), next_label)
         buttons["quit"] = Button(pygame.Rect(290, 600, 140, 48), "Quit")
         buttons["next"].enabled = state.can_start_new_round
     return buttons
@@ -668,37 +738,58 @@ def render(surface: pygame.Surface, state: GameState, images: Dict[str, pygame.S
 
     pygame.draw.rect(surface, PANEL_BG, (32, 98, WINDOW_WIDTH - 64, 72), border_radius=10)
     pygame.draw.rect(surface, GOLD, (32, 98, WINDOW_WIDTH - 64, 72), width=2, border_radius=10)
-    stats = (
-        f"Bankroll: {state.bankroll}    Bet: {state.current_bet}    "
-        f"Record W/L/P: {state.wins}/{state.losses}/{state.pushes}"
-    )
+    if state.mode == GameMode.NORMAL:
+        stats = (
+            f"Mode: NORMAL    Bankroll: {state.bankroll}    Bet: {state.current_bet}    "
+            f"Record W/L/P: {state.wins}/{state.losses}/{state.pushes}"
+        )
+    elif state.mode == GameMode.HARDCORE:
+        stats = (
+            f"Mode: HARDCORE (camera)    Decisive Rounds: {state.rounds_completed}    "
+            f"Record W/L/P: {state.wins}/{state.losses}/{state.pushes}"
+        )
+    else:
+        stats = "Mode: SELECT    Choose Normal or Hardcore to begin"
     surface.blit(text_font.render(stats, True, TEXT_IVORY), (48, 120))
 
-    dealer_total, _ = state.dealer_hand.value()
-    player_total, _ = state.player_hand.value()
-    hide_hole = state.phase == Phase.PLAYER_TURN
-    dealer_value_text = "?" if hide_hole else str(dealer_total)
+    if state.phase == Phase.MODE_SELECT:
+        mode_font = pygame.font.SysFont("georgia", 26, bold=True)
+        info_font = pygame.font.SysFont("georgia", 20)
+        heading = mode_font.render("Choose Your Mode", True, GOLD_SOFT)
+        line1 = info_font.render("Normal: bets + mouse controls, no camera input", True, TEXT_IVORY)
+        line2 = info_font.render("Hardcore: camera controls only, ties auto-redeal", True, TEXT_IVORY)
+        line3 = info_font.render("Single decisive round, then Play Again or Quit", True, TEXT_IVORY)
+        surface.blit(heading, (WINDOW_WIDTH // 2 - heading.get_width() // 2, 214))
+        surface.blit(line1, (WINDOW_WIDTH // 2 - line1.get_width() // 2, 272))
+        surface.blit(line2, (WINDOW_WIDTH // 2 - line2.get_width() // 2, 308))
+        surface.blit(line3, (WINDOW_WIDTH // 2 - line3.get_width() // 2, 344))
+    else:
+        dealer_total, _ = state.dealer_hand.value()
+        player_total, _ = state.player_hand.value()
+        hide_hole = state.phase == Phase.PLAYER_TURN
+        dealer_value_text = "?" if hide_hole else str(dealer_total)
 
-    surface.blit(mono_font.render(f"DEALER [{dealer_value_text}]", True, GOLD_SOFT), (40, 186))
-    surface.blit(mono_font.render(f"PLAYER [{player_total}]", True, GOLD_SOFT), (40, 446))
+        draw_cards(surface, images, state.dealer_visual_cards, now_ms=now_ms, hide_second=hide_hole)
+        draw_cards(surface, images, state.player_visual_cards, now_ms=now_ms, hide_second=False)
+        surface.blit(mono_font.render(f"DEALER [{dealer_value_text}]", True, GOLD_SOFT), (40, 174))
+        surface.blit(mono_font.render(f"PLAYER [{player_total}]", True, GOLD_SOFT), (40, 415))
 
-    draw_cards(surface, images, state.dealer_visual_cards, now_ms=now_ms, hide_second=hide_hole)
-    draw_cards(surface, images, state.player_visual_cards, now_ms=now_ms, hide_second=False)
-
-    pygame.draw.rect(surface, PANEL_BG, (32, 356, WINDOW_WIDTH - 64, 54), border_radius=10)
-    pygame.draw.rect(surface, GOLD, (32, 356, WINDOW_WIDTH - 64, 54), width=2, border_radius=10)
+    message_y = 392 if state.phase == Phase.MODE_SELECT else 356
+    pygame.draw.rect(surface, PANEL_BG, (32, message_y, WINDOW_WIDTH - 64, 54), border_radius=10)
+    pygame.draw.rect(surface, GOLD, (32, message_y, WINDOW_WIDTH - 64, 54), width=2, border_radius=10)
     message_surf = small_font.render(state.message, True, TEXT_IVORY)
-    surface.blit(message_surf, (48, 374))
+    surface.blit(message_surf, (48, message_y + 18))
 
     buttons = build_buttons(state)
     mouse_pos = pygame.mouse.get_pos()
     for button in buttons.values():
         button.draw(surface, text_font, hovered=button.enabled and button.rect.collidepoint(mouse_pos))
 
-    # Deck visual anchor where cards animate from
-    deck_rect = pygame.Rect(DECK_ORIGIN[0], DECK_ORIGIN[1], CARD_WIDTH, CARD_HEIGHT)
-    pygame.draw.rect(surface, GOLD, deck_rect.inflate(8, 8), border_radius=8, width=2)
-    surface.blit(images["card_back.png"], deck_rect.topleft)
+    if state.phase != Phase.MODE_SELECT:
+        # Deck visual anchor where cards animate from
+        deck_rect = pygame.Rect(DECK_ORIGIN[0], DECK_ORIGIN[1], CARD_WIDTH, CARD_HEIGHT)
+        pygame.draw.rect(surface, GOLD, deck_rect.inflate(8, 8), border_radius=8, width=2)
+        surface.blit(images["card_back.png"], deck_rect.topleft)
 
     pygame.display.flip()
     return buttons
@@ -718,9 +809,12 @@ def handle_player_action(state: GameState, action: str, now_ms: int) -> None:
         add_visual_card(state, "player", card, now_ms=now_ms)
 
         if state.player_hand.is_bust():
-            settle_round(state, RoundResult.LOSE)
+            settle_round(state, RoundResult.LOSE, now_ms=now_ms)
         else:
-            state.message = "Your turn: Hit or Stand."
+            if state.mode == GameMode.HARDCORE:
+                state.message = "Hardcore: camera controls only. Show fist=Hit, palm=Stand."
+            else:
+                state.message = "Your turn: Hit or Stand."
         return
 
     if action == "stand":
@@ -729,10 +823,35 @@ def handle_player_action(state: GameState, action: str, now_ms: int) -> None:
         return
 
 
+def init_normal_mode(state: GameState, start_bankroll: int) -> None:
+    state.mode = GameMode.NORMAL
+    state.bankroll = max(0, start_bankroll)
+    state.current_bet = max(MIN_BET, min(max(state.bankroll, MIN_BET), 100))
+    state.player_hand = Hand()
+    state.dealer_hand = Hand()
+    state.player_visual_cards = []
+    state.dealer_visual_cards = []
+    state.round_result = RoundResult.NONE
+    state.rounds_completed = 0
+    state.can_start_new_round = state.bankroll >= state.min_bet
+    if not state.can_start_new_round:
+        state.phase = Phase.ROUND_END
+        state.message = "Game over: bankroll below minimum bet."
+    else:
+        state.phase = Phase.BETTING
+        state.message = "Place your bet and click Deal."
+
+
+def init_hardcore_mode(state: GameState, now_ms: int) -> None:
+    state.mode = GameMode.HARDCORE
+    state.bankroll = 0
+    state.current_bet = MIN_BET
+    state.round_result = RoundResult.NONE
+    state.can_start_new_round = True
+    start_hardcore_round(state, now_ms=now_ms)
+
+
 def run_game(start_bankroll: int, fps: int) -> int:
-    if start_bankroll <= 0:
-        print("Starting bankroll must be > 0", file=sys.stderr)
-        return 2
     if fps <= 0:
         print("FPS must be > 0", file=sys.stderr)
         return 2
@@ -752,23 +871,15 @@ def run_game(start_bankroll: int, fps: int) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    state = GameState(bankroll=start_bankroll)
-    state.current_bet = max(MIN_BET, min(start_bankroll, 100))
-    state.can_start_new_round = state.bankroll >= state.min_bet
-    if not state.can_start_new_round:
-        state.phase = Phase.ROUND_END
-        state.message = "Game over: bankroll below minimum bet."
-
-    gesture = GestureController()
-    if gesture.enabled:
-        state.message = "Camera controls: 3s startup cooldown, then fist=Hit and flat palm=Stand."
+    state = GameState(bankroll=0)
+    gesture: Optional[GestureController] = None
 
     running = True
     try:
         while running:
             buttons = render(screen, state, card_images)
 
-            if state.phase == Phase.PLAYER_TURN and gesture.enabled:
+            if state.phase == Phase.PLAYER_TURN and gesture is not None and gesture.enabled:
                 action = gesture.poll_action(allow_split=False)
                 if action in ("hit", "stand"):
                     handle_player_action(state, action, now_ms=pygame.time.get_ticks())
@@ -780,7 +891,28 @@ def run_game(start_bankroll: int, fps: int) -> int:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     click_ms = pygame.time.get_ticks()
                     pos = event.pos
-                    if state.phase == Phase.BETTING:
+                    if state.phase == Phase.MODE_SELECT:
+                        if "normal_mode" in buttons and buttons["normal_mode"].contains(pos):
+                            if gesture is not None:
+                                gesture.close()
+                                gesture = None
+                            init_normal_mode(state, start_bankroll=start_bankroll)
+                        elif "hardcore_mode" in buttons and buttons["hardcore_mode"].contains(pos):
+                            if gesture is not None:
+                                gesture.close()
+                                gesture = None
+                            gesture = GestureController(active=True)
+                            if not gesture.enabled:
+                                state.message = "Hardcore requires camera + OpenCV + MediaPipe."
+                                state.mode = None
+                                state.phase = Phase.MODE_SELECT
+                            else:
+                                init_hardcore_mode(state, now_ms=click_ms)
+                                state.message = "Hardcore: camera controls only. 3s startup cooldown, fist=Hit, palm=Stand."
+                        elif "quit" in buttons and buttons["quit"].contains(pos):
+                            running = False
+                            break
+                    elif state.mode == GameMode.NORMAL and state.phase == Phase.BETTING:
                         if "dec" in buttons and buttons["dec"].contains(pos):
                             state.current_bet = max(state.min_bet, state.current_bet - BET_STEP)
                         elif "inc" in buttons and buttons["inc"].contains(pos):
@@ -795,22 +927,27 @@ def run_game(start_bankroll: int, fps: int) -> int:
                             else:
                                 deal_initial_cards(state, now_ms=click_ms)
                                 state.phase = Phase.PLAYER_TURN
-                                state.message = "Your turn: Hit, Stand, or camera gesture."
+                                state.message = "Your turn: Hit or Stand."
                                 resolve_natural_blackjacks(state)
-                    elif state.phase == Phase.PLAYER_TURN:
+                    elif state.mode == GameMode.NORMAL and state.phase == Phase.PLAYER_TURN:
                         if "hit" in buttons and buttons["hit"].contains(pos):
                             handle_player_action(state, "hit", now_ms=click_ms)
                         elif "stand" in buttons and buttons["stand"].contains(pos):
                             handle_player_action(state, "stand", now_ms=click_ms)
                     elif state.phase == Phase.ROUND_END:
                         if "next" in buttons and buttons["next"].contains(pos):
-                            state.reset_for_next_round()
+                            if state.mode == GameMode.HARDCORE:
+                                state.reset_for_next_round()
+                                start_hardcore_round(state, now_ms=click_ms)
+                            else:
+                                state.reset_for_next_round()
                         elif "quit" in buttons and buttons["quit"].contains(pos):
                             running = False
                             break
             clock.tick(fps)
     finally:
-        gesture.close()
+        if gesture is not None:
+            gesture.close()
         pygame.quit()
 
     return 0

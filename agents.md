@@ -13,9 +13,9 @@
 - Redaction rule: secrets -> [REDACTED]
 
 ## Latest Summary (update every run)
-- Current goal: Finalize reliable computer-vision gesture controls for Blackjack in extension flow
-- Current status: ✅ Implemented - Blackjack has activation-gated, stability-tracked gesture controls with latching and cooldown safeguards
-- Next action: Live test camera gestures in Extension Host and tune thresholds based on real lighting/camera conditions
+- Current goal: Stabilize Blackjack UX/documentation after mode split and layout adjustments
+- Current status: ✅ Updated - Blackjack now starts with in-game mode selection, has corrected table alignment, and all agent logs are synced to current state
+- Next action: Execute full Extension Host validation for both modes and capture any final threshold/spacing tweaks from live camera use
 
 ---
 
@@ -417,3 +417,107 @@ date '+%Y-%m-%d %H:%M'
    - verify stand and split reliability
 2. Tune `stability_threshold`, activation hold duration, and cooldown values based on real use.
 3. Optionally add a settings panel/config file for gesture sensitivity presets.
+
+---
+
+## Run Entry: v6
+- Date/time: 2026-02-14 01:33
+- Tool: Codex (GPT-5)
+- High-level task: Redesign Blackjack into Normal and Hardcore modes with distinct input and round behavior
+- Inputs provided: Request for two modes:
+  - `normal`: existing game loop but without visual (camera) input
+  - `hardcore`: one decisive round only, no money/betting, tie auto-starts next round, and uses visual input
+
+### Key decisions/assumptions:
+1. **Mode model**: Added explicit `GameMode` enum (`normal`, `hardcore`) and CLI switch `--mode`.
+2. **Input separation**:
+   - `normal` mode disables camera gesture initialization entirely.
+   - `hardcore` mode requires camera controller startup (`OpenCV + MediaPipe + camera`).
+3. **Hardcore round rule**: Push/tie does not end the run; it redeals automatically until a non-push result.
+4. **Economy rule**: Hardcore removes meaningful bankroll/bet flow from gameplay (single decisive result only).
+5. **UI/controls**:
+   - Normal keeps betting + mouse hit/stand.
+   - Hardcore runs camera gameplay during `PLAYER_TURN` and shows `Play Again` / `Quit` on round end.
+
+### Commands executed:
+```bash
+python/venv/bin/python -m py_compile python/games/blackjack.py
+python/venv/bin/python python/games/blackjack.py --help
+date '+%Y-%m-%d %H:%M'
+```
+
+### Files changed:
+1. **python/games/blackjack.py**
+   - Added `GameMode` enum and `--mode` CLI argument.
+   - Added mode-aware state handling in `GameState`.
+   - Added Hardcore round bootstrap helper with tie auto-redeal behavior.
+   - Made round settlement mode-aware (`normal` bankroll logic vs `hardcore` decisive-round logic).
+   - Restricted gesture controller activation to Hardcore only.
+   - Updated render/button flows for mode-specific UX labels and control availability.
+2. **agents.md**
+   - Updated latest summary and appended this run entry.
+
+### Outputs/results:
+- ✅ `normal` mode now runs without camera/gesture input.
+- ✅ `hardcore` mode now uses camera controls and enforces one decisive outcome (auto-redeal on ties).
+- ✅ `blackjack.py` compiles after refactor.
+- ✅ CLI now exposes mode selection:
+  - `--mode normal`
+  - `--mode hardcore`
+
+### Errors/blockers:
+1. **Known macOS warnings**: Duplicate SDL symbol warnings from `pygame` + `cv2` still appear in this environment; non-fatal.
+2. **Runtime dependency requirement**: Hardcore exits with error if camera stack is unavailable.
+
+### TODO / next steps:
+1. Playtest `normal` mode from Extension Host and verify no camera window appears.
+2. Playtest `hardcore` mode and verify tie auto-redeal + decisive end screen behavior.
+3. Optionally add separate VSCode commands for each mode launch if you want both directly in Command Palette.
+
+---
+
+## Run Entry: v7
+- Date/time: 2026-02-14 01:51
+- Tool: Codex (GPT-5)
+- High-level task: Sync and update all agents log markdown files to reflect current Blackjack implementation status
+- Inputs provided: Request to review all `agents*.md` files and update them
+
+### Key decisions/assumptions:
+1. **Scope interpretation**: Treated "all agentmns.md" as all present `agents*.md` files in repo root.
+2. **Snapshot handling**: Updated each snapshot file’s `Latest Summary` block to current project state for consistency.
+3. **Canonical log**: Added a new run entry in `agents.md` (v7) to record this synchronization pass.
+
+### Commands executed:
+```bash
+rg --files -g 'agents*.md' -g 'AGENTS*.md'
+date '+%Y-%m-%d %H:%M'
+```
+
+### Files changed:
+1. **agents.md**
+   - Updated `Latest Summary` to reflect current Blackjack UX + log sync status.
+   - Appended `Run Entry: v7`.
+2. **agents_v1_2026-02-13_1942.md**
+   - Updated `Latest Summary` lines.
+3. **agents_v2_2026-02-13_2228.md**
+   - Updated `Latest Summary` lines.
+4. **agents_v3_2026-02-13_2305.md**
+   - Updated `Latest Summary` lines.
+5. **agents_v4_2026-02-13_2346.md**
+   - Updated `Latest Summary` lines.
+6. **agents_v5_2026-02-14_0031.md**
+   - Updated `Latest Summary` lines.
+
+### Outputs/results:
+- ✅ All detected agent log markdown files were reviewed and updated.
+- ✅ Snapshot summaries now consistently reflect the current Blackjack state:
+  - in-game Normal/Hardcore mode selection at launch
+  - corrected table/layout alignment adjustments
+  - mode-specific control behavior
+
+### Errors/blockers:
+1. None during this log synchronization task.
+
+### TODO / next steps:
+1. Run F5 Extension Host validation for Blackjack Normal mode and capture observations.
+2. Run F5 Extension Host validation for Blackjack Hardcore mode and capture camera/gesture reliability notes.
