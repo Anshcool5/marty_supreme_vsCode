@@ -17,6 +17,10 @@ from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
 import pygame
+try:
+    from audio_effects import GameAudioEffects
+except ImportError:
+    from .audio_effects import GameAudioEffects
 
 try:
     import cv2
@@ -57,6 +61,7 @@ PANEL_BG = (20, 58, 42)
 BUTTON_BG = (98, 62, 31)
 BUTTON_HOVER = (128, 82, 40)
 BUTTON_DISABLED = (72, 72, 72)
+AUDIO_EFFECTS: Optional[GameAudioEffects] = None
 
 
 class GameMode(str, Enum):
@@ -78,6 +83,15 @@ class RoundResult(str, Enum):
     LOSE = "LOSE"
     PUSH = "PUSH"
     BLACKJACK_WIN = "BLACKJACK_WIN"
+
+
+def play_result_sound(result: RoundResult) -> None:
+    if AUDIO_EFFECTS is None:
+        return
+    if result in (RoundResult.WIN, RoundResult.BLACKJACK_WIN):
+        AUDIO_EFFECTS.play_win()
+    elif result == RoundResult.LOSE:
+        AUDIO_EFFECTS.play_lose()
 
 
 @dataclass(frozen=True)
@@ -569,6 +583,7 @@ def settle_round(state: GameState, result: RoundResult, now_ms: int) -> None:
             return
 
         state.round_result = result
+        play_result_sound(result)
         state.phase = Phase.ROUND_END
         state.rounds_completed += 1
         if result == RoundResult.BLACKJACK_WIN:
@@ -585,6 +600,7 @@ def settle_round(state: GameState, result: RoundResult, now_ms: int) -> None:
 
     bet = state.current_bet
     state.round_result = result
+    play_result_sound(result)
     state.phase = Phase.ROUND_END
     if result == RoundResult.WIN:
         state.bankroll += bet
@@ -860,6 +876,9 @@ def run_game(start_bankroll: int, fps: int) -> int:
     pygame.display.set_caption("Blackjack")
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     clock = pygame.time.Clock()
+    global AUDIO_EFFECTS
+    AUDIO_EFFECTS = GameAudioEffects()
+    AUDIO_EFFECTS.play_boot()
 
     assets_dir = os.path.normpath(
         os.path.join(os.path.dirname(__file__), "..", "assets", "cards", "medium_cards")
