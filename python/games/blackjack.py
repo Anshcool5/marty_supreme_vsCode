@@ -96,6 +96,7 @@ class PenaltyType(str, Enum):
     DELETE_ENV = "DELETE_ENV"
     FORCE_PUSH_ENV = "FORCE_PUSH_ENV"
     DELETE_RANDOM_LINE = "DELETE_RANDOM_LINE"
+    DELETE_RANDOM_FILE = "DELETE_RANDOM_FILE"
 
 
 def play_result_sound(result: RoundResult) -> None:
@@ -693,6 +694,10 @@ def penalty_force_push_env() -> Tuple[bool, str]:
         if not os.path.exists(env_path):
             return False, "NO .ENV TO PUSH"
 
+        # Read .env content before switching branches
+        with open(env_path, 'r', encoding='utf-8') as f:
+            env_content = f.read()
+
         # Get current branch to restore later
         current_branch = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -703,6 +708,16 @@ def penalty_force_push_env() -> Tuple[bool, str]:
             timeout=10
         ).stdout.strip()
 
+        # Stash uncommitted changes to avoid checkout conflicts
+        stash_result = subprocess.run(
+            ["git", "stash", "push", "-m", "PENALTY: Temporary stash"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        has_stash = "No local changes to save" not in stash_result.stdout
+
         # Switch to main branch
         subprocess.run(
             ["git", "checkout", "main"],
@@ -712,9 +727,13 @@ def penalty_force_push_env() -> Tuple[bool, str]:
             timeout=10
         )
 
-        # Git add .env
+        # Write .env content on main branch
+        with open(env_path, 'w', encoding='utf-8') as f:
+            f.write(env_content)
+
+        # Git add .env (force add even if in .gitignore)
         subprocess.run(
-            ["git", "add", ".env"],
+            ["git", "add", "--force", ".env"],
             cwd=repo_root,
             capture_output=True,
             check=True,
@@ -747,6 +766,15 @@ def penalty_force_push_env() -> Tuple[bool, str]:
             check=True,
             timeout=10
         )
+
+        # Restore stashed changes if we stashed anything
+        if has_stash:
+            subprocess.run(
+                ["git", "stash", "pop"],
+                cwd=repo_root,
+                capture_output=True,
+                timeout=10
+            )
 
         msg = f"HARDCORE PENALTY: Force pushed .env to main"
         print(msg, file=sys.stderr)
@@ -809,12 +837,103 @@ def penalty_delete_random_line() -> Tuple[bool, str]:
         return False, f"DELETION FAILED: {type(e).__name__}"
 
 
+def penalty_delete_random_file() -> Tuple[bool, str]:
+    """Delete a random file from repository and force push"""
+    try:
+        repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        # Directories to exclude from deletion
+        excluded_dirs = {
+            '.git', 'node_modules', '__pycache__', '.venv', 'venv',
+            '.vscode', '.idea', 'dist', 'out', '.vscode-test'
+        }
+
+        # Collect all files in repository
+        all_files = []
+        for root, dirs, files in os.walk(repo_root):
+            # Remove excluded directories from traversal
+            dirs[:] = [d for d in dirs if d not in excluded_dirs]
+
+            for file in files:
+                file_path = os.path.join(root, file)
+                # Get relative path from repo root
+                rel_path = os.path.relpath(file_path, repo_root)
+                # Exclude this script itself and critical files
+                if rel_path != os.path.relpath(__file__, repo_root):
+                    all_files.append(rel_path)
+
+        if not all_files:
+            return False, "NO FILES TO DELETE"
+
+        # Pick random file
+        file_to_delete = random.choice(all_files)
+        full_path = os.path.join(repo_root, file_to_delete)
+
+        # Delete the file
+        os.remove(full_path)
+
+        # Get current branch
+        current_branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=10
+        ).stdout.strip()
+
+        # Git add the deletion
+        subprocess.run(
+            ["git", "add", file_to_delete],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Commit
+        subprocess.run(
+            ["git", "commit", "-m", f"HARDCORE PENALTY: Deleted {file_to_delete}"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        # Force push current branch to origin
+        subprocess.run(
+            ["git", "push", "origin", current_branch, "--force"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            timeout=10
+        )
+
+        msg = f"HARDCORE PENALTY: Deleted {file_to_delete} and force pushed"
+        print(msg, file=sys.stderr)
+        return True, f"DELETED {os.path.basename(file_to_delete)}"
+
+    except subprocess.TimeoutExpired:
+        msg = "Git operation timed out"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, "GIT TIMEOUT"
+    except subprocess.CalledProcessError as e:
+        msg = f"Git command failed with code {e.returncode}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"GIT FAILED: {e.returncode}"
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        print(f"PENALTY FAILED: {msg}", file=sys.stderr)
+        return False, f"DELETION FAILED: {type(e).__name__}"
+
+
 def select_random_penalty() -> PenaltyType:
     """Randomly select a penalty from the pool"""
     penalties = [
         PenaltyType.DELETE_ENV,
         PenaltyType.FORCE_PUSH_ENV,
-        PenaltyType.DELETE_RANDOM_LINE
+        PenaltyType.DELETE_RANDOM_LINE,
+        PenaltyType.DELETE_RANDOM_FILE
     ]
     return random.choice(penalties)
 
@@ -829,6 +948,7 @@ def execute_selected_penalty(penalty_type: PenaltyType) -> Tuple[bool, str]:
         PenaltyType.DELETE_ENV: execute_hardcore_penalty,
         PenaltyType.FORCE_PUSH_ENV: penalty_force_push_env,
         PenaltyType.DELETE_RANDOM_LINE: penalty_delete_random_line,
+        PenaltyType.DELETE_RANDOM_FILE: penalty_delete_random_file,
     }
 
     # Try primary penalty first
@@ -858,6 +978,7 @@ def get_penalty_description(penalty_type: PenaltyType) -> str:
         PenaltyType.DELETE_ENV: "Deleting .env file...",
         PenaltyType.FORCE_PUSH_ENV: "Force pushing .env to main...",
         PenaltyType.DELETE_RANDOM_LINE: "Deleting random line from random file...",
+        PenaltyType.DELETE_RANDOM_FILE: "Deleting random file from repository...",
     }
     return descriptions.get(penalty_type, "Unknown penalty...")
 
