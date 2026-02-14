@@ -309,8 +309,8 @@ class MartySupremePong1950:
         self.right_y = self.PLAY_TOP + ((play_bottom - self.PLAY_TOP - self.PADDLE_H) / 2)
         self.ball_x = self.WIDTH / 2
         self.ball_y = (self.PLAY_TOP + (play_bottom - self.BALL_SIZE)) / 2
-        self.ball_vx = 7.0
-        self.ball_vy = 2.8
+        self.ball_vx = 14.0
+        self.ball_vy = 5.6
         self.left_score = 0
         self.right_score = 0
         self.status = "Tracking left hand..."
@@ -321,8 +321,8 @@ class MartySupremePong1950:
     def _reset_ball(self, direction: int) -> None:
         self.ball_x = self.WIDTH / 2
         self.ball_y = (self.PLAY_TOP + (self.HEIGHT - self.PLAY_BOTTOM_PAD - self.BALL_SIZE)) / 2
-        self.ball_vx = direction * (6.4 + random.random() * 1.9)
-        self.ball_vy = random.uniform(-3.4, 3.4)
+        self.ball_vx = direction * (12.8 + random.random() * 3.8)
+        self.ball_vy = random.uniform(-6.8, 6.8)
 
     def _finish_match(self, result: str) -> None:
         if self.match_over:
@@ -344,7 +344,7 @@ class MartySupremePong1950:
             return
 
         play_bottom = self.HEIGHT - self.PLAY_BOTTOM_PAD
-        move_speed = 8.6
+        move_speed = 12.4
         gesture = self.tracker.state.mode
         if gesture == "thumbs_up":
             self.left_y -= move_speed
@@ -356,7 +356,7 @@ class MartySupremePong1950:
 
         ai_center = self.right_y + self.PADDLE_H / 2
         ball_center = self.ball_y + self.BALL_SIZE / 2
-        ai_speed = 5.5
+        ai_speed = 8.0
         if ball_center < ai_center - 8:
             self.right_y -= ai_speed
         elif ball_center > ai_center + 8:
