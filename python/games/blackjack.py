@@ -62,6 +62,7 @@ BUTTON_BG = (98, 62, 31)
 BUTTON_HOVER = (128, 82, 40)
 BUTTON_DISABLED = (72, 72, 72)
 AUDIO_EFFECTS: Optional[GameAudioEffects] = None
+CURRENT_THEME_MODE: Optional["GameMode"] = None
 
 
 class GameMode(str, Enum):
@@ -83,6 +84,40 @@ class RoundResult(str, Enum):
     LOSE = "LOSE"
     PUSH = "PUSH"
     BLACKJACK_WIN = "BLACKJACK_WIN"
+
+
+def set_mode_theme_music(mode: Optional["GameMode"]) -> None:
+    global CURRENT_THEME_MODE
+    if mode is None:
+        try:
+            pygame.mixer.music.stop()
+        except pygame.error:
+            pass
+        CURRENT_THEME_MODE = None
+        return
+
+    if CURRENT_THEME_MODE == mode:
+        return
+
+    themes_dir = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), "..", "assets", "audio_effects", "themes")
+    )
+    if mode == GameMode.NORMAL:
+        theme_file = "black_jack_normal_theme.mp3"
+    else:
+        theme_file = "black_jack_hardcore_theme.mp3"
+    theme_path = os.path.join(themes_dir, theme_file)
+    if not os.path.exists(theme_path):
+        print(f"Warning: Blackjack theme missing: {theme_path}", file=sys.stderr)
+        return
+
+    try:
+        pygame.mixer.music.load(theme_path)
+        pygame.mixer.music.set_volume(0.55)
+        pygame.mixer.music.play(-1)
+        CURRENT_THEME_MODE = mode
+    except pygame.error as err:
+        print(f"Warning: failed to play Blackjack theme ({theme_file}): {err}", file=sys.stderr)
 
 
 def play_result_sound(result: RoundResult) -> None:
@@ -841,6 +876,7 @@ def handle_player_action(state: GameState, action: str, now_ms: int) -> None:
 
 def init_normal_mode(state: GameState, start_bankroll: int) -> None:
     state.mode = GameMode.NORMAL
+    set_mode_theme_music(GameMode.NORMAL)
     state.bankroll = max(0, start_bankroll)
     state.current_bet = max(MIN_BET, min(max(state.bankroll, MIN_BET), 100))
     state.player_hand = Hand()
@@ -860,6 +896,7 @@ def init_normal_mode(state: GameState, start_bankroll: int) -> None:
 
 def init_hardcore_mode(state: GameState, now_ms: int) -> None:
     state.mode = GameMode.HARDCORE
+    set_mode_theme_music(GameMode.HARDCORE)
     state.bankroll = 0
     state.current_bet = MIN_BET
     state.round_result = RoundResult.NONE
@@ -965,6 +1002,7 @@ def run_game(start_bankroll: int, fps: int) -> int:
                             break
             clock.tick(fps)
     finally:
+        set_mode_theme_music(None)
         if gesture is not None:
             gesture.close()
         pygame.quit()
