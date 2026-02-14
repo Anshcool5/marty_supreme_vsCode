@@ -188,12 +188,52 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  // Register Slot Machine game command
+  const slotMachineGameCommand = vscode.commands.registerCommand(
+    'marty-supreme.runSlotMachine',
+    async () => {
+      outputChannel.show();
+      outputChannel.appendLine('Starting Slot Machine 1950s Vegas...');
+
+      try {
+        const pythonManager = new PythonProcessManager(context, outputChannel);
+
+        const gameScriptPath = path.join(
+          context.extensionPath,
+          'python',
+          'games',
+          'slot_machine.py'
+        );
+
+        const process = await pythonManager.spawn(gameScriptPath);
+
+        if (process) {
+          outputChannel.appendLine('Slot Machine 1950s started successfully!');
+          vscode.window.showInformationMessage(
+            'Marty Supreme: Pull your fist down to spin the slots!'
+          );
+
+          process.on('exit', (code) => {
+            outputChannel.appendLine(`Slot Machine process exited with code ${code}`);
+            vscode.window.showInformationMessage('Slot Machine 1950s ended.');
+          });
+        }
+      } catch (error) {
+        const errorMsg =
+          error instanceof Error ? error.message : 'Unknown error occurred';
+        outputChannel.appendLine(`Error: ${errorMsg}`);
+        vscode.window.showErrorMessage(`Failed to start Slot Machine: ${errorMsg}`);
+      }
+    }
+  );
+
   // Add commands to subscriptions
   context.subscriptions.push(helloCommand);
   context.subscriptions.push(exampleGameCommand);
   context.subscriptions.push(tetrisGameCommand);
   context.subscriptions.push(blackjackGameCommand);
   context.subscriptions.push(pongGameCommand);
+  context.subscriptions.push(slotMachineGameCommand);
   context.subscriptions.push(outputChannel);
 
   // Show welcome message
