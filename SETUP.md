@@ -395,6 +395,184 @@ Quick validation flow in agent mode:
 
 ---
 
+## 🤖 Claude Code MCP Setup
+
+Use this to enable the Pong MCP server in Claude Code (Anthropic's VS Code extension).
+
+### Prerequisites
+
+- Claude Code extension installed in VS Code
+- MCP server built (see "Agent Mode MCP Setup" section above)
+- Node.js 18+ available in PATH
+
+### Configuration Options
+
+Claude Code supports MCP servers at three scopes:
+
+1. **User scope** (`~/.claude.json`) - Available across all your projects
+2. **Project scope** (`.mcp.json` in project root) - Shared with team via git
+3. **Local scope** (`~/.claude.json` with project path) - Project-specific, not shared
+
+### Option 1: User-Scoped Setup (Recommended for Personal Use)
+
+Add the MCP server to your global Claude Code configuration:
+
+**Windows (PowerShell/CMD):**
+```cmd
+claude mcp add --scope user --transport stdio marty-pong -- node C:/Users/YourUsername/Documents/Projects/marty_supreme_vsCode/mcp/dist/server.js
+```
+
+**macOS/Linux:**
+```bash
+claude mcp add --scope user --transport stdio marty-pong -- node /Users/yourusername/Documents/Projects/marty_supreme_vsCode/mcp/dist/server.js
+```
+
+This updates `~/.claude.json` and makes the MCP server available in all workspaces.
+
+### Option 2: Project-Scoped Setup (Recommended for Teams)
+
+Create `.mcp.json` in the project root:
+
+```json
+{
+  "mcpServers": {
+    "marty-pong": {
+      "command": "node",
+      "args": [
+        "C:/Users/YourUsername/Documents/Projects/marty_supreme_vsCode/mcp/dist/server.js"
+      ],
+      "env": {}
+    }
+  }
+}
+```
+
+**Important:** Use absolute paths, and replace `YourUsername` with your actual username.
+
+### Verifying Installation
+
+1. **Restart VS Code** to load the new MCP configuration
+
+2. **Check MCP server status** in Claude Code chat:
+   ```
+   /mcp
+   ```
+
+3. **List configured servers:**
+   ```cmd
+   claude mcp list
+   ```
+
+4. **Test the tools** - In Claude Code chat, try:
+   ```
+   launch pong
+   ```
+
+### Available MCP Tools
+
+Once configured, Claude Code can use these tools:
+
+- **`launch_pong(showPreview?: boolean)`** - Launch the Pong game
+  - Returns: `{status: "launched" | "already_running" | "error", message: string, pid?: number}`
+
+- **`pong_status()`** - Check if Pong is running
+  - Returns: `{status: "running" | "not_running", pid?: number}`
+
+- **`stop_pong(force?: boolean)`** - Stop the Pong game
+  - Returns: `{status: "stopped" | "not_running" | "error", message: string}`
+
+### Example Usage
+
+In Claude Code chat:
+
+```
+User: "Launch pong with preview"
+Claude: *uses launch_pong(showPreview: true) tool*
+
+User: "Is pong running?"
+Claude: *uses pong_status() tool*
+
+User: "Stop the game"
+Claude: *uses stop_pong() tool*
+```
+
+### Windows-Specific Fix
+
+The MCP server has been updated to use `python` instead of `python3` on Windows. If you cloned an older version, update `mcp/src/server.ts`:
+
+```typescript
+// Change this:
+return "python3";
+
+// To this:
+return "python";
+```
+
+Then rebuild:
+```cmd
+npm run mcp:build
+```
+
+### Troubleshooting Claude Code MCP
+
+**MCP server not appearing:**
+- Restart VS Code completely (File → Exit, then reopen)
+- Run `claude mcp list` to verify configuration
+- Check for typos in the MCP server path
+
+**"No MCP servers found":**
+- Ensure `.mcp.json` is in the project root OR the server is in `~/.claude.json`
+- Verify the MCP server file exists: `mcp/dist/server.js`
+- Check that Node.js is in your PATH: `node --version`
+
+**Pong launches but window doesn't appear:**
+- Check your taskbar - the window might be hidden
+- Use Alt+Tab (Windows) or Cmd+Tab (macOS) to find the window
+- The game requires webcam access - grant permissions if prompted
+
+**"python not found" error:**
+- On Windows, ensure Python is in PATH
+- The MCP server uses `python` command (not `python3`)
+- Test: `python --version` should work
+
+**Module not found errors:**
+- Re-install MCP dependencies: `npm --prefix mcp install`
+- Rebuild the server: `npm run mcp:build`
+
+**Permission denied:**
+- On first use, Claude Code will prompt you to approve the MCP server
+- Click "Allow" to enable the tools
+
+### Managing MCP Servers
+
+**List all servers:**
+```bash
+claude mcp list
+```
+
+**Get details for a specific server:**
+```bash
+claude mcp get marty-pong
+```
+
+**Remove a server:**
+```bash
+claude mcp remove marty-pong
+```
+
+**Reset project-scoped approvals:**
+```bash
+claude mcp reset-project-choices
+```
+
+### Security Note
+
+- **Project-scoped servers** (`.mcp.json`) require approval on first use
+- This prevents malicious projects from running arbitrary code
+- You'll see a prompt asking to approve the server - click "Allow" if you trust the project
+
+---
+
 ## 📦 Project Structure
 
 ```
