@@ -741,89 +741,53 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
-  const startThinkingGameCommand = vscode.commands.registerCommand(
-    'marty-supreme.startThinkingGame',
+  // Register Pong game command (hand-tracked)
+  const pongGameCommand = vscode.commands.registerCommand(
+    'marty-supreme.runPong',
     async () => {
-      outputChannel.show(true);
-      try {
-        await thinkingPong.startThinking('manual_command');
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        outputChannel.appendLine(`Failed to start thinking game: ${errorMsg}`);
-        vscode.window.showErrorMessage(`Could not start thinking game: ${errorMsg}`);
-      }
-    }
-  );
+      outputChannel.show();
+      outputChannel.appendLine('Starting Pong 1950 (hand tracking)...');
 
-  const startThinkingGameDebugCommand = vscode.commands.registerCommand(
-    'marty-supreme.startThinkingGameDebug',
-    async () => {
-      outputChannel.show(true);
       try {
-        await thinkingPong.startThinking('manual_command_debug_preview', { debugPreview: true });
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        outputChannel.appendLine(`Failed to start thinking game (debug): ${errorMsg}`);
-        vscode.window.showErrorMessage(
-          `Could not start thinking game debug preview: ${errorMsg}`
+        const pythonManager = new PythonProcessManager(context, outputChannel);
+        const gameScriptPath = path.join(
+          context.extensionPath,
+          'python',
+          'games',
+          'hand_server.py'
         );
-      }
-    }
-  );
 
-  const stopThinkingGameCommand = vscode.commands.registerCommand(
-    'marty-supreme.stopThinkingGame',
-    () => {
-      thinkingPong.stopThinking();
-    }
-  );
+        const process = await pythonManager.spawn(gameScriptPath, [
+          '--run-pong',
+          '--show-preview',
+        ]);
 
-  // Chat Participant API availability depends on VS Code version.
-  const chatApi = (vscode as any).chat;
-  if (chatApi?.createChatParticipant) {
-    const participant = chatApi.createChatParticipant(
-      'pingpong.agent',
-      async (request: any, _ctx: any, stream: any, token: vscode.CancellationToken) => {
-        const prompt = typeof request?.prompt === 'string' ? request.prompt : '';
-        await thinkingPong.startThinking('chat_request');
-        stream.markdown('Running ping-pong while I think...');
+        if (process) {
+          outputChannel.appendLine('Pong 1950 started successfully!');
+          vscode.window.showInformationMessage(
+            'Marty Supreme: Pong 1950 is running!'
+          );
 
-        try {
-          // Keep the game active while we "think". Replace with real model/tool logic.
-          await new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(() => resolve(), 1800);
-            token.onCancellationRequested(() => {
-              clearTimeout(timeout);
-              reject(new Error('Chat request canceled'));
-            });
+          process.on('exit', (code) => {
+            outputChannel.appendLine(`Pong process exited with code ${code}`);
+            vscode.window.showInformationMessage('Pong 1950 ended.');
           });
-
-          const summary = prompt.trim().length > 0 ? prompt.trim() : 'No prompt text received.';
-          stream.markdown(`Done. I was thinking while the game ran.\n\nPrompt summary: ${summary}`);
-          return { metadata: { ranThinkingGame: true } };
-        } finally {
-          thinkingPong.stopThinking();
         }
+      } catch (error) {
+        const errorMsg =
+          error instanceof Error ? error.message : 'Unknown error occurred';
+        outputChannel.appendLine(`Error: ${errorMsg}`);
+        vscode.window.showErrorMessage(`Failed to start Pong: ${errorMsg}`);
       }
-    );
-
-    context.subscriptions.push(participant);
-    outputChannel.appendLine('Chat participant registered: @pingpong');
-  } else {
-    outputChannel.appendLine(
-      'Chat Participant API not available in this VS Code build. Use start/stop commands.'
-    );
-  }
+    }
+  );
 
   // Add commands to subscriptions
   context.subscriptions.push(helloCommand);
   context.subscriptions.push(exampleGameCommand);
   context.subscriptions.push(tetrisGameCommand);
   context.subscriptions.push(blackjackGameCommand);
-  context.subscriptions.push(startThinkingGameCommand);
-  context.subscriptions.push(startThinkingGameDebugCommand);
-  context.subscriptions.push(stopThinkingGameCommand);
-  context.subscriptions.push(thinkingPong);
+  context.subscriptions.push(pongGameCommand);
   context.subscriptions.push(outputChannel);
 
   // Show welcome message

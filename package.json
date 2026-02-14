@@ -19,10 +19,7 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:marty-supreme.startThinkingGame",
-    "onCommand:marty-supreme.startThinkingGameDebug",
-    "onCommand:marty-supreme.stopThinkingGame",
-    "onChatParticipant:pingpong.agent"
+    "onCommand:marty-supreme.runPong"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -63,6 +60,10 @@
       {
         "command": "marty-supreme.runBlackjack",
         "title": "Marty Supreme: Run Blackjack 1940s"
+      },
+      {
+        "command": "marty-supreme.runPong",
+        "title": "Marty Supreme: Run Pong 1950 (Hand Tracking)"
       }
     ]
   },
