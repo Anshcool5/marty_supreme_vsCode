@@ -56,11 +56,12 @@ npm run compile
 
 ## 🤖 Agent Mode (MCP)
 
-This repo includes a local MCP server for agent tooling in `mcp/` with 3 tools:
+This repo includes a local MCP server for agent tooling in `mcp/` with game lifecycle tools:
 
-- `launch_pong(showPreview?: boolean)`
-- `pong_status()`
-- `stop_pong(force?: boolean)`
+- `launch_pong(showPreview?: boolean)`, `pong_status()`, `stop_pong(force?: boolean)`
+- `launch_tetris()`, `tetris_status()`, `stop_tetris(force?: boolean)`
+- `launch_blackjack()`, `blackjack_status()`, `stop_blackjack(force?: boolean)`
+- `launch_slots()`, `slots_status()`, `stop_slots(force?: boolean)`
 
 Quick setup:
 
