@@ -294,10 +294,117 @@ npm run watch
 
 ---
 
+## 🤖 Agent Mode MCP Setup (Codex)
+
+Use this if you want agent mode to launch/check/stop Pong through tools instead of chat mentions.
+
+### Important for Collaborators
+
+- `mcp/` source files are committed to git.
+- `mcp/node_modules` is **not** committed.
+- Every collaborator must run dependency install locally.
+
+### Step 1: Install MCP Dependencies
+
+From repo root:
+
+**Windows (PowerShell/CMD):**
+```cmd
+npm --prefix mcp install
+```
+
+**macOS/Linux:**
+```bash
+npm --prefix mcp install
+```
+
+### Step 2: Build MCP Server
+
+From repo root:
+
+**Windows:**
+```cmd
+npm run mcp:build
+```
+
+**macOS/Linux:**
+```bash
+npm run mcp:build
+```
+
+This creates:
+
+- `mcp/dist/server.js`
+
+### Step 3: Register MCP Server in Codex
+
+Edit:
+
+- `~/.codex/config.toml`
+
+Add:
+
+```toml
+[mcp_servers.marty_pong]
+command = "node"
+args = ["/ABSOLUTE/PATH/TO/marty_supreme_vsCode/mcp/dist/server.js"]
+```
+
+Example on this project:
+
+```toml
+[mcp_servers.marty_pong]
+command = "node"
+args = ["/Users/siddharthdileep/silicon/marty_supreme_vsCode/mcp/dist/server.js"]
+```
+
+Then restart Codex/session so MCP config is reloaded.
+
+### Step 4: Verify MCP Tools Are Available
+
+Expected tools:
+
+- `launch_pong(showPreview?: boolean)`
+- `pong_status()`
+- `stop_pong(force?: boolean)`
+
+Quick validation flow in agent mode:
+
+1. Call `launch_pong` (expect `launched`).
+2. Call `launch_pong` again (expect `already_running`).
+3. Call `pong_status` (expect `running` with pid).
+4. Call `stop_pong` (expect `stopped`).
+5. Call `pong_status` again (expect `not_running`).
+
+### Troubleshooting MCP
+
+**`server.js` not found**
+- Re-run `npm run mcp:build`.
+- Confirm file exists: `mcp/dist/server.js`.
+
+**Module not found (`@modelcontextprotocol/sdk`)**
+- Run `npm --prefix mcp install`.
+
+**Node not found**
+- Check `node --version` (Node 18+ required).
+
+**Pong launch fails**
+- Ensure Python deps are installed in your environment (`opencv-python`, `mediapipe`, `pygame`).
+- Verify script path exists: `python/games/hand_server.py`.
+- Grant camera permission to terminal/VS Code host.
+
+---
+
 ## 📦 Project Structure
 
 ```
 marty_supreme_vsCode/
+├── mcp/
+│   ├── src/
+│   │   └── server.ts        # MCP server source
+│   ├── dist/                # Built MCP server output (auto-generated)
+│   ├── package.json         # MCP package manifest
+│   └── README.md            # MCP-specific docs
 ├── .vscode/
 │   ├── launch.json          # Debug configuration
 │   └── tasks.json           # Build tasks
@@ -330,6 +437,9 @@ Open Command Palette (**Ctrl+Shift+P** on Windows, **Cmd+Shift+P** on macOS):
    - Demonstrates Python integration
    - Spawns a Python subprocess
    - Shows communication between extension and Python
+
+3. **Marty Supreme: Run Pong 1950 (Hand Tracking)**
+   - Launches Pong directly from the extension
 
 ---
 

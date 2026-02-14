@@ -52,6 +52,30 @@ npm run compile
 
 - **Marty Supreme: Hello World** - Test the extension
 - **Marty Supreme: Run Example Game** - Test Python integration with example game
+- **Marty Supreme: Run Pong 1950 (Hand Tracking)** - Launch hand-tracked Pong
+
+## 🤖 Agent Mode (MCP)
+
+This repo includes a local MCP server for agent tooling in `mcp/` with 3 tools:
+
+- `launch_pong(showPreview?: boolean)`
+- `pong_status()`
+- `stop_pong(force?: boolean)`
+
+Quick setup:
+
+```bash
+npm --prefix mcp install
+npm run mcp:build
+```
+
+Then point your agent MCP config to run:
+
+```bash
+node /absolute/path/to/marty_supreme_vsCode/mcp/dist/server.js
+```
+
+See `mcp/README.md` for full setup and troubleshooting.
 
 ## 🏗️ Architecture
 

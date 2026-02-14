@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "marty-pong": {
+      "command": "node",
+      "args": [
+        "/ABSOLUTE/PATH/TO/marty_supreme_vsCode/mcp/dist/server.js"
+      ],
+      "env": {}
+    }
+  }
+}

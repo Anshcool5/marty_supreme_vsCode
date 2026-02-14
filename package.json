@@ -60,6 +60,9 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc --noEmit && node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs --watch",
+    "mcp:build": "npm --prefix mcp run build",
+    "mcp:dev": "npm --prefix mcp run dev",
+    "mcp:start": "npm --prefix mcp run start",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "devDependencies": {
