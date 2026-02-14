@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { PythonProcessManager } from './python/processManager';
 import * as path from 'path';
+import { ChildProcess } from 'child_process';
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('Marty Supreme extension is now active!');
@@ -8,6 +9,55 @@ export function activate(context: vscode.ExtensionContext) {
   // Create output channel for logging
   const outputChannel = vscode.window.createOutputChannel('Marty Supreme');
   outputChannel.appendLine('Marty Supreme extension activated!');
+  const pythonManager = new PythonProcessManager(context, outputChannel);
+  let activePongProcess: ChildProcess | undefined;
+
+  const startPongIfNotRunning = async (): Promise<{ started: boolean; message: string }> => {
+    if (
+      activePongProcess &&
+      activePongProcess.exitCode === null &&
+      !activePongProcess.killed
+    ) {
+      return { started: false, message: 'Pong already running.' };
+    }
+
+    try {
+      const gameScriptPath = path.join(
+        context.extensionPath,
+        'python',
+        'games',
+        'hand_server.py'
+      );
+
+      const process = await pythonManager.spawn(gameScriptPath, [
+        '--run-pong',
+        '--show-preview',
+      ]);
+
+      if (!process) {
+        return {
+          started: false,
+          message: 'Failed to launch Pong. Check Output > Marty Supreme.',
+        };
+      }
+
+      activePongProcess = process;
+      activePongProcess.on('exit', (code) => {
+        outputChannel.appendLine(`Pong process exited with code ${code}`);
+        activePongProcess = undefined;
+      });
+
+      return { started: true, message: 'Pong launched successfully.' };
+    } catch (error) {
+      const errorMsg =
+        error instanceof Error ? error.message : 'Unknown error occurred';
+      outputChannel.appendLine(`Failed to launch Pong: ${errorMsg}`);
+      return {
+        started: false,
+        message: `Failed to launch Pong: ${errorMsg}. Check Output > Marty Supreme.`,
+      };
+    }
+  };
 
   // Register hello command
   const helloCommand = vscode.commands.registerCommand('marty-supreme.hello', () => {
@@ -23,9 +73,6 @@ export function activate(context: vscode.ExtensionContext) {
       outputChannel.appendLine('Starting example game...');
 
       try {
-        // Create Python process manager
-        const pythonManager = new PythonProcessManager(context, outputChannel);
-
         // Path to example game script
         const gameScriptPath = path.join(
           context.extensionPath,
@@ -81,8 +128,6 @@ export function activate(context: vscode.ExtensionContext) {
       outputChannel.appendLine('Starting Tetris 1926...');
 
       try {
-        const pythonManager = new PythonProcessManager(context, outputChannel);
-
         const gameScriptPath = path.join(
           context.extensionPath,
           'python',
@@ -118,8 +163,6 @@ export function activate(context: vscode.ExtensionContext) {
       outputChannel.appendLine('Starting Blackjack 1940s...');
 
       try {
-        const pythonManager = new PythonProcessManager(context, outputChannel);
-
         const gameScriptPath = path.join(
           context.extensionPath,
           'python',
@@ -154,39 +197,41 @@ export function activate(context: vscode.ExtensionContext) {
       outputChannel.show();
       outputChannel.appendLine('Starting Pong 1950 (hand tracking)...');
 
-      try {
-        const pythonManager = new PythonProcessManager(context, outputChannel);
-        const gameScriptPath = path.join(
-          context.extensionPath,
-          'python',
-          'games',
-          'hand_server.py'
-        );
-
-        const process = await pythonManager.spawn(gameScriptPath, [
-          '--run-pong',
-          '--show-preview',
-        ]);
-
-        if (process) {
-          outputChannel.appendLine('Pong 1950 started successfully!');
-          vscode.window.showInformationMessage(
-            'Marty Supreme: Pong 1950 is running!'
-          );
-
-          process.on('exit', (code) => {
-            outputChannel.appendLine(`Pong process exited with code ${code}`);
-            vscode.window.showInformationMessage('Pong 1950 ended.');
-          });
-        }
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : 'Unknown error occurred';
-        outputChannel.appendLine(`Error: ${errorMsg}`);
-        vscode.window.showErrorMessage(`Failed to start Pong: ${errorMsg}`);
+      const result = await startPongIfNotRunning();
+      if (result.started) {
+        outputChannel.appendLine('Pong 1950 started successfully!');
+        vscode.window.showInformationMessage('Marty Supreme: Pong 1950 is running!');
+      } else {
+        outputChannel.appendLine(result.message);
+        vscode.window.showWarningMessage(result.message);
       }
     }
   );
+
+  const chatApi = (vscode as any).chat;
+  if (chatApi?.createChatParticipant) {
+    const martyParticipant = chatApi.createChatParticipant(
+      'marty.agent',
+      async (request: any, _ctx: any, stream: any) => {
+        outputChannel.show(true);
+        const result = await startPongIfNotRunning();
+        stream.markdown(result.message);
+
+        const prompt = typeof request?.prompt === 'string' ? request.prompt.trim() : '';
+        if (prompt) {
+          stream.markdown(`Prompt: ${prompt}`);
+        }
+
+        return { metadata: { started: result.started } };
+      }
+    );
+    context.subscriptions.push(martyParticipant);
+    outputChannel.appendLine('Chat participant registered: @marty');
+  } else {
+    outputChannel.appendLine(
+      'Chat Participant API not available in this VS Code build.'
+    );
+  }
 
   // Add commands to subscriptions
   context.subscriptions.push(helloCommand);
@@ -194,6 +239,13 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(tetrisGameCommand);
   context.subscriptions.push(blackjackGameCommand);
   context.subscriptions.push(pongGameCommand);
+  context.subscriptions.push(
+    new vscode.Disposable(() => {
+      if (activePongProcess && activePongProcess.exitCode === null) {
+        pythonManager.terminate(activePongProcess);
+      }
+    })
+  );
   context.subscriptions.push(outputChannel);
 
   // Show welcome message

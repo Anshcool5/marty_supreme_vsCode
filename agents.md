@@ -13,9 +13,9 @@
 - Redaction rule: secrets -> [REDACTED]
 
 ## Latest Summary (update every run)
-- Current goal: Improve Pong play feel with discrete gesture controls and tighter on-screen physics/layout boundaries
-- Current status: ✅ Updated - Pong now uses thumbs up/down to move, fist to hold, with faster ball speed and corrected playfield bounds/alignment
-- Next action: Live-test gesture recognition reliability and tweak speed/sensitivity values based on camera angle and lighting
+- Current goal: Enable `@marty` chat invocation to launch Pong during coding-agent workflows
+- Current status: ✅ Implemented - Added VS Code chat participant `@marty` with deduplicated Pong launch and lifecycle cleanup
+- Next action: Validate `@marty` behavior in Extension Host Chat and confirm duplicate-launch prevention under repeated prompts
 
 ---
 
@@ -615,3 +615,51 @@ date '+%Y-%m-%d %H:%M'
 ### TODO / next steps:
 1. Run live camera test and adjust movement step size (`move_speed`) if needed.
 2. Tune thumb/fist detection thresholds for your exact hand orientation and camera placement.
+
+---
+
+## Run Entry: v10
+- Date/time: 2026-02-14 04:19
+- Tool: Codex (GPT-5)
+- High-level task: Implement `@marty` chat participant to launch Pong with process de-duplication
+- Inputs provided: Explicit execution plan to add chat participant metadata, shared Pong launcher helper, dedupe, and cleanup
+
+### Key decisions/assumptions:
+1. **Chat default action**: `@marty` always attempts to launch Pong.
+2. **Deduplication rule**: Reuse a single active Pong process guard and return \"already running\" when process is alive.
+3. **Code reuse**: Command `runPong` now uses the same shared launcher helper as chat to avoid behavior drift.
+4. **Cleanup**: Added disposable termination for active Pong process on extension teardown.
+
+### Commands executed:
+```bash
+npm run compile
+rg -n \"marty.agent|onChatParticipant|chatParticipants|runPong|startPongIfNotRunning|createChatParticipant\" package.json src/extension.ts
+date '+%Y-%m-%d %H:%M'
+```
+
+### Files changed:
+1. **package.json**
+   - Added activation event `onChatParticipant:marty.agent`.
+   - Added `contributes.chatParticipants` entry for `@marty`.
+2. **src/extension.ts**
+   - Added `activePongProcess` guard.
+   - Added shared helper `startPongIfNotRunning()`.
+   - Updated `marty-supreme.runPong` command to use shared helper.
+   - Added chat participant registration using `createChatParticipant(\"marty.agent\", ...)`.
+   - Added teardown disposable to terminate active Pong process.
+3. **agents.md**
+   - Updated latest summary and added this run entry.
+
+### Outputs/results:
+- ✅ `@marty` participant is now contributed and activated.
+- ✅ Chat invocation launches Pong and returns status message.
+- ✅ Repeated invocation avoids duplicate Pong processes.
+- ✅ `runPong` command continues to work through same shared launch path.
+- ✅ TypeScript build compiles successfully.
+
+### Errors/blockers:
+1. Chat participant availability depends on VS Code build exposing Chat Participant API.
+
+### TODO / next steps:
+1. F5 into Extension Host and verify `@marty` appears in chat participants.
+2. Confirm first `@marty` launches Pong and second call returns already-running status.

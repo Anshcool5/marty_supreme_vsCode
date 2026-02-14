@@ -19,10 +19,20 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:marty-supreme.runPong"
+    "onCommand:marty-supreme.runPong",
+    "onChatParticipant:marty.agent"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "chatParticipants": [
+      {
+        "id": "marty.agent",
+        "name": "marty",
+        "fullName": "Marty Supreme Agent",
+        "description": "Launches Marty Pong while you think",
+        "isSticky": true
+      }
+    ],
     "commands": [
       {
         "command": "marty-supreme.hello",
