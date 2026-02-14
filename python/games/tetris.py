@@ -221,11 +221,12 @@ def get_shape():
     return Piece(5, 0, random.choice(shapes))
 
 #put a text in the middle of the screen
-def draw_text_middle(surface, text, size, color):
+def draw_text_middle(surface, text, size, color, y_offset=0):
     font = pygame.font.SysFont("georgia", size, bold=True)
     label = font.render(text, 1, color)
 
-    surface.blit(label, (top_left_x + play_width /2 - (label.get_width()/2), top_left_y + play_height/2 - label.get_height()/2))
+    center_y = top_left_y + play_height/2 - label.get_height()/2
+    surface.blit(label, (top_left_x + play_width /2 - (label.get_width()/2), center_y + y_offset))
 
 
 def draw_button(surface, rect, text, hovered=False):
@@ -244,8 +245,8 @@ def show_end_screen(surface, title, subtitle):
     while True:
         mouse_pos = pygame.mouse.get_pos()
         draw_deco_background(surface)
-        draw_text_middle(surface, title, 66, TEXT_MAIN)
-        draw_text_middle(surface, subtitle, 30, TEXT_SOFT)
+        draw_text_middle(surface, title, 66, TEXT_MAIN, y_offset=-120)
+        draw_text_middle(surface, subtitle, 30, TEXT_SOFT, y_offset=-30)
         draw_button(surface, play_again, "PLAY AGAIN", play_again.collidepoint(mouse_pos))
         draw_button(surface, quit_btn, "QUIT", quit_btn.collidepoint(mouse_pos))
         draw_scanlines(surface)
@@ -414,7 +415,7 @@ def main(win):
     next_piece = get_shape()
     clock = pygame.time.Clock()
     fall_time = 0
-    fall_speed_real = 0.45
+    fall_speed_real = 0.8
     fall_speed = fall_speed_real
     level_time = 0
     score = 0
@@ -423,7 +424,7 @@ def main(win):
     right_wait = 0
     rotate_wait = 0
     down_wait = 0
-    fall_speed_down = 0.1
+    fall_speed_down = 0.3
     lines_cleared = 0
 
     # Cooldowns smooth gesture inputs and reduce jitter / repeated accidental moves.
@@ -610,8 +611,8 @@ def main_menu(win):
     while run:
         mouse_pos = pygame.mouse.get_pos()
         draw_deco_background(win)
-        draw_text_middle(win, 'TETRIS 1926', 74, TEXT_MAIN)
-        draw_text_middle(win, 'HAND-GESTURE EDITION', 30, TEXT_SOFT)
+        draw_text_middle(win, 'TETRIS 1926', 74, TEXT_MAIN, y_offset=-120)
+        draw_text_middle(win, 'HAND-GESTURE EDITION', 30, TEXT_SOFT, y_offset=-30)
         draw_button(win, start_btn, "START", start_btn.collidepoint(mouse_pos))
         draw_button(win, quit_btn, "QUIT", quit_btn.collidepoint(mouse_pos))
         draw_scanlines(win)
