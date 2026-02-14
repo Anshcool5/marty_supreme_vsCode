@@ -1,10 +1,13 @@
 # Marty Supreme MCP Server
 
-MCP server that exposes agent tools for Pong lifecycle control:
+MCP server that exposes agent tools for game lifecycle control:
 
 - `launch_pong(showPreview?: boolean)`
 - `pong_status()`
 - `stop_pong(force?: boolean)`
+- `launch_ninja(showPreview?: boolean, cameraIndex?: number)`
+- `ninja_status()`
+- `stop_ninja(force?: boolean)`
 
 This is additive to the VS Code extension command/chat flows. It does not replace:
 
@@ -46,7 +49,7 @@ Use the sample config in `mcp/codex.mcp.example.json` and point your client to r
 - `node`
 - args: `["/absolute/path/to/marty_supreme_vsCode/mcp/dist/server.js"]`
 
-Set approvals to prompt for mutating tools (`launch_pong`, `stop_pong`) and allow `pong_status` without prompt if your client supports per-tool policies.
+Set approvals to prompt for mutating tools (`launch_*`, `stop_*`) and allow status tools without prompt if your client supports per-tool policies.
 
 ## Tool Contracts
 
@@ -92,6 +95,48 @@ Output:
 { "status": "stopped|not_running|error", "message": "string" }
 ```
 
+### `launch_ninja`
+
+Input:
+
+```json
+{ "showPreview": false, "cameraIndex": 0 }
+```
+
+Output:
+
+```json
+{ "status": "launched|already_running|error", "message": "string", "pid": 12345 }
+```
+
+### `ninja_status`
+
+Input:
+
+```json
+{}
+```
+
+Output:
+
+```json
+{ "status": "running|not_running", "pid": 12345 }
+```
+
+### `stop_ninja`
+
+Input:
+
+```json
+{ "force": false }
+```
+
+Output:
+
+```json
+{ "status": "stopped|not_running|error", "message": "string" }
+```
+
 ## Troubleshooting
 
 - Camera permission denied:
@@ -100,7 +145,9 @@ Output:
   - Install from your project venv.
 - Script not found:
   - Verify `python/games/hand_server.py` exists in this repo.
+- Ninja script not found:
+  - Verify `python/games/ninja.py` exists in this repo.
 - Tool returns `already_running`:
-  - Use `pong_status` and `stop_pong` to manage lifecycle.
+  - Use `*_status` and `stop_*` to manage lifecycle.
 
 Server logs are written to `stderr` with the prefix `[marty-mcp]`.
