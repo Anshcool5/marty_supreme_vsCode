@@ -41,8 +41,10 @@ function normalizeInterpreterPath(
 
 export async function resolvePythonInterpreter(
   context: vscode.ExtensionContext,
-  output?: vscode.OutputChannel
+  output?: vscode.OutputChannel,
+  options?: { requiredModules?: string[] }
 ): Promise<string> {
+  const requiredModules = options?.requiredModules ?? [];
   const candidates: string[] = [];
   const seen = new Set<string>();
   const addCandidate = (candidate: string) => {
@@ -96,10 +98,32 @@ export async function resolvePythonInterpreter(
       probe.on('exit', (code) => resolve(code === 0));
     });
 
-    if (available) {
-      output?.appendLine(`Using Python interpreter: ${candidate}`);
-      return candidate;
+    if (!available) {
+      continue;
     }
+
+    if (requiredModules.length > 0) {
+      const moduleProbe = await new Promise<boolean>((resolve) => {
+        const script =
+          "import importlib.util,sys;" +
+          `mods=${JSON.stringify(requiredModules)};` +
+          "missing=[m for m in mods if importlib.util.find_spec(m) is None];" +
+          "sys.exit(0 if not missing else 2)";
+        const probe = spawn(candidate, ['-c', script]);
+        probe.on('error', () => resolve(false));
+        probe.on('exit', (code) => resolve(code === 0));
+      });
+
+      if (!moduleProbe) {
+        output?.appendLine(
+          `Skipping Python interpreter (missing modules ${requiredModules.join(', ')}): ${candidate}`
+        );
+        continue;
+      }
+    }
+
+    output?.appendLine(`Using Python interpreter: ${candidate}`);
+    return candidate;
   }
 
   throw new Error(

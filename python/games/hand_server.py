@@ -7,18 +7,20 @@ Streams normalized paddle position over WebSocket.
 import argparse
 import asyncio
 import json
-import time
+import sys
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
 import websockets
 
+MEDIAPIPE_IMPORT_ERROR = ""
 try:
     import mediapipe as mp  # Optional for more robust tracking
     HAS_MEDIAPIPE = True
-except ImportError:
+except Exception as err:
     HAS_MEDIAPIPE = False
+    MEDIAPIPE_IMPORT_ERROR = str(err)
 
 
 @dataclass
@@ -44,9 +46,11 @@ class HandTracker:
         self._cap = None
         self._hands = None
         self._drawing = None
+        self._mp_hands = None
 
     def open(self) -> None:
         if HAS_MEDIAPIPE:
+            self._mp_hands = mp.solutions.hands
             self._drawing = mp.solutions.drawing_utils
 
         self._cap = cv2.VideoCapture(self._camera_index)
@@ -58,9 +62,9 @@ class HandTracker:
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
         if HAS_MEDIAPIPE:
-            self._hands = mp.solutions.hands.Hands(
+            self._hands = self._mp_hands.Hands(
                 static_image_mode=False,
-                max_num_hands=1,
+                max_num_hands=2,
                 min_detection_confidence=0.55,
                 min_tracking_confidence=0.55,
             )
@@ -146,79 +150,53 @@ class HandTracker:
 
             if result.multi_hand_landmarks:
                 detection_found = True
-                mode = "mediapipe_finger"
-                landmarks = result.multi_hand_landmarks[0].landmark
+                mode = "mediapipe_left_palm_y"
+                left_idx = None
+                left_conf = 0.0
 
-                # Finger-guided pointer: blend index tip with palm center for stable control.
-                index_tip = landmarks[8]
-                palm_ids = [0, 5, 9, 13, 17]
-                palm_x = sum(landmarks[i].x for i in palm_ids) / len(palm_ids)
-                palm_y = sum(landmarks[i].y for i in palm_ids) / len(palm_ids)
-
-                target_x = (0.7 * index_tip.x) + (0.3 * palm_x)
-                target_y = (0.7 * index_tip.y) + (0.3 * palm_y)
-
-                confidence = 0.95
                 if result.multi_handedness:
-                    confidence = max(0.65, min(0.99, result.multi_handedness[0].classification[0].score))
+                    for idx, handedness in enumerate(result.multi_handedness):
+                        classification = handedness.classification[0]
+                        if classification.label == "Left" and classification.score > left_conf:
+                            left_idx = idx
+                            left_conf = classification.score
 
-                self._set_detected(target_x, target_y, confidence=confidence, mode=mode)
-                if self._show_preview and self._drawing:
-                    self._drawing.draw_landmarks(
-                        frame,
-                        result.multi_hand_landmarks[0],
-                        mp.solutions.hands.HAND_CONNECTIONS,
-                    )
-            else:
-                self._set_not_detected()
-                mode = "mediapipe"
-        else:
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            lower = np.array([0, 20, 70], dtype=np.uint8)
-            upper = np.array([20, 255, 255], dtype=np.uint8)
-            mask = cv2.inRange(hsv, lower, upper)
-            mask = cv2.GaussianBlur(mask, (7, 7), 0)
+                if left_idx is not None:
+                    hand_landmarks = result.multi_hand_landmarks[left_idx]
+                    landmarks = hand_landmarks.landmark
 
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                prev_x = self._smooth_x * max(w, 1)
-                prev_y = self._smooth_y * max(h, 1)
-                best = None
-                best_score = -1.0
+                    # Left palm center tracking (wrist + palm knuckle bases), Y axis only.
+                    palm_ids = [0, 5, 9, 13, 17]
+                    palm_center_y = sum(landmarks[i].y for i in palm_ids) / float(len(palm_ids))
+                    target_y = palm_center_y
+                    target_x = self._smooth_x  # Y-only control for paddle movement.
 
-                for contour in contours:
-                    area = cv2.contourArea(contour)
-                    if area < 900:
-                        continue
+                    confidence = max(0.65, min(0.99, left_conf if left_conf > 0 else 0.9))
+                    self._set_detected(target_x, target_y, confidence=confidence, mode=mode)
 
-                    x, y, cw, ch = cv2.boundingRect(contour)
-                    center_x = x + (cw / 2.0)
-                    center_y = y + (ch / 2.0)
-                    dist = float(((center_x - prev_x) ** 2 + (center_y - prev_y) ** 2) ** 0.5)
-
-                    # Penalize upper-frame blobs (commonly faces) and prefer continuity.
-                    upper_penalty = 0.3 if center_y < (h * 0.2) else 1.0
-                    score = (area / max(dist, 1.0)) * upper_penalty
-                    if score > best_score:
-                        best_score = score
-                        best = (x, y, cw, ch, center_x, center_y, area)
-
-                if best is not None:
-                    detection_found = True
-                    mode = "opencv"
-                    x, y, cw, ch, center_x, center_y, _ = best
-                    x_norm = center_x / max(w, 1)
-                    y_norm = center_y / max(h, 1)
-                    self._set_detected(x_norm, y_norm, confidence=0.6, mode=mode)
-                    if self._show_preview:
-                        cv2.rectangle(frame, (x, y), (x + cw, y + ch), (0, 255, 0), 2)
-                        cv2.circle(frame, (int(center_x), int(center_y)), 6, (0, 255, 255), -1)
+                    if self._show_preview and self._drawing:
+                        self._drawing.draw_landmarks(
+                            frame,
+                            hand_landmarks,
+                            self._mp_hands.HAND_CONNECTIONS,
+                        )
                 else:
+                    detection_found = False
                     self._set_not_detected()
-                    mode = "opencv"
+                    mode = "mediapipe_waiting_left_hand"
             else:
                 self._set_not_detected()
-                mode = "opencv"
+                mode = "mediapipe_no_hands"
+        else:
+            self._set_not_detected()
+            mode = "mediapipe_missing"
+            self._update(
+                ok=False,
+                error=(
+                    "MediaPipe is required for hand skeleton tracking. "
+                    f"Python={sys.executable}. Import error: {MEDIAPIPE_IMPORT_ERROR or 'not installed'}"
+                ),
+            )
 
         if self._show_preview:
             snapshot = self.snapshot()
@@ -259,6 +237,14 @@ async def run_server(port: int, camera_index: int, show_preview: bool):
     tracker = HandTracker(camera_index=camera_index, show_preview=show_preview)
     tracker.open()
 
+    print(f"INFO hand_server python={sys.executable}", flush=True)
+    if HAS_MEDIAPIPE:
+        print("INFO mediapipe=available", flush=True)
+    else:
+        print(
+            f"WARN mediapipe=missing error={MEDIAPIPE_IMPORT_ERROR or 'not installed'}",
+            flush=True,
+        )
     print(f"INFO hand_server listening ws://127.0.0.1:{port}", flush=True)
 
     async with websockets.serve(lambda ws: stream_handler(ws, tracker), "127.0.0.1", port, ping_interval=20):

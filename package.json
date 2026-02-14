@@ -45,7 +45,6 @@
         "title": "Marty Supreme: Run Example Game"
       },
       {
-<<<<<<< HEAD
         "command": "marty-supreme.startThinkingGame",
         "title": "Marty Supreme: Start Thinking Ping Pong"
       },
@@ -56,14 +55,14 @@
       {
         "command": "marty-supreme.stopThinkingGame",
         "title": "Marty Supreme: Stop Thinking Ping Pong"
-=======
+      },
+      {
         "command": "marty-supreme.runTetris",
         "title": "Marty Supreme: Run Tetris 1926"
       },
       {
         "command": "marty-supreme.runBlackjack",
         "title": "Marty Supreme: Run Blackjack 1940s"
->>>>>>> main
       }
     ]
   },

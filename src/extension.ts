@@ -98,7 +98,9 @@ class ThinkingPingPongController implements vscode.Disposable {
       return;
     }
 
-    const pythonBin = await resolvePythonInterpreter(this.context, this.output);
+    const pythonBin = await resolvePythonInterpreter(this.context, this.output, {
+      requiredModules: ['cv2', 'mediapipe', 'websockets'],
+    });
     const scriptPath = path.join(this.context.extensionPath, 'python', 'games', 'hand_server.py');
     const args = [scriptPath, '--port', String(this.handServerPort)];
     if (this.debugPreviewEnabled) {
@@ -144,19 +146,22 @@ class ThinkingPingPongController implements vscode.Disposable {
   <title>Marty Supreme Ping Pong</title>
   <style>
     :root {
-      --bg: #0f1b2d;
-      --bg2: #14294a;
-      --fg: #f3f8ff;
-      --accent: #f6c445;
-      --muted: #8ea5c2;
-      --paddle: #77d4ff;
-      --ball: #ff7f5c;
+      --bg: #2a160c;
+      --bg2: #120a05;
+      --fg: #f1dfbf;
+      --accent: #d39a55;
+      --muted: #c2a57e;
+      --line: #8c6233;
+      --panel: #3e2515;
+      --paddle: #d5a66a;
+      --paddleAi: #9f6b3b;
+      --ball: #f2c27b;
     }
     body {
       margin: 0;
       font-family: Menlo, Monaco, Consolas, monospace;
       color: var(--fg);
-      background: radial-gradient(circle at top right, #274b82 0%, var(--bg) 52%, #0a1320 100%);
+      background: radial-gradient(circle at top right, #5a341a 0%, var(--bg) 50%, var(--bg2) 100%);
       height: 100vh;
       display: flex;
       flex-direction: column;
@@ -166,7 +171,7 @@ class ThinkingPingPongController implements vscode.Disposable {
       justify-content: space-between;
       align-items: center;
       padding: 10px 14px;
-      border-bottom: 1px solid #2a3f61;
+      border-bottom: 1px solid var(--line);
       font-size: 12px;
       letter-spacing: 0.08em;
       text-transform: uppercase;
@@ -188,9 +193,9 @@ class ThinkingPingPongController implements vscode.Disposable {
       width: 100%;
       height: 100%;
       display: block;
-      border: 1px solid #2a3f61;
+      border: 1px solid var(--line);
       border-radius: 8px;
-      background: linear-gradient(180deg, #0d1a2b 0%, #0c1422 100%);
+      background: linear-gradient(180deg, #2e1a10 0%, #1c110a 100%);
     }
     #overlay {
       position: absolute;
@@ -202,11 +207,11 @@ class ThinkingPingPongController implements vscode.Disposable {
       color: var(--muted);
       backdrop-filter: blur(2px);
       border-radius: 8px;
-      border: 1px dashed #385782;
+      border: 1px dashed var(--line);
       pointer-events: none;
       font-size: 14px;
       line-height: 1.4;
-      background: rgba(8, 16, 27, 0.55);
+      background: rgba(16, 9, 5, 0.58);
     }
     #overlay.hidden {
       display: none;
@@ -234,13 +239,39 @@ class ThinkingPingPongController implements vscode.Disposable {
 
     let thinking = false;
     let ws = null;
+    let wsReconnectTimer = null;
+    let wsReconnectAttempts = 0;
+    let wsPort = null;
+    let wsRestartCooldownUntil = 0;
     let lastHandX = 0.5;
     let lastHandY = 0.5;
+    let lastHandSampleTime = 0;
+    let handVelocityY = 0;
     let handConfidence = 0;
+    let handMode = 'idle';
+    let handOk = false;
     let keyboardY = 0.5;
+    let filteredSensorY = 0.5;
+    let leftPaddleVel = 0;
+    let lastFrameTime = performance.now();
+    let gameStarted = false;
+    let trackingStableFrames = 0;
     let keyUp = false;
     let keyDown = false;
     let scores = { left: 0, right: 0 };
+    const control = {
+      sensorFilterBase: 0.62,
+      sensorFilterMotionBoost: 0.008,
+      leadTimeMs: 285,
+      springK: 92.0,
+      damping: 4.6,
+      velocityMatchGain: 18.2,
+      directHandFeed: 1.25,
+      maxVelPxPerSec: 8600,
+      maxAccelPxPerSec2: 90000,
+      deadZonePx: 0.3
+    };
+    let aiAimOffset = (Math.random() - 0.5) * 90;
 
     const state = {
       leftY: canvas.height / 2 - 54,
@@ -257,38 +288,80 @@ class ThinkingPingPongController implements vscode.Disposable {
     function setThinkingUI(active, reason = '') {
       thinking = active;
       statusEl.textContent = active ? 'Thinking' : 'Idle';
-      overlay.classList.toggle('hidden', active);
+      overlay.classList.toggle('hidden', active && gameStarted);
       if (!active) {
         overlay.textContent = 'Idle. Start via command or @pingpong chat participant.';
+      } else if (!gameStarted) {
+        overlay.textContent = 'Show LEFT palm to camera to start.';
       } else if (reason) {
         overlay.textContent = 'Thinking: ' + reason;
       }
     }
 
-    function connectSocket(port) {
+    function connectSocket(port, isReconnect = false) {
+      wsPort = port;
+      if (!isReconnect) {
+        wsReconnectAttempts = 0;
+      }
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+      }
       if (ws) {
         ws.close();
       }
       ws = new WebSocket('ws://127.0.0.1:' + port);
+      ws.onopen = () => {
+        wsReconnectAttempts = 0;
+        lastHandSampleTime = 0;
+        handVelocityY = 0;
+        leftPaddleVel = 0;
+        handMode = 'idle';
+        handOk = false;
+      };
       ws.onmessage = (evt) => {
         try {
           const msg = JSON.parse(evt.data);
           if (typeof msg.paddleX === 'number') {
             lastHandX = Math.max(0, Math.min(1, msg.paddleX));
           }
+          const prevY = lastHandY;
           if (typeof msg.paddleY === 'number') {
             lastHandY = Math.max(0, Math.min(1, msg.paddleY));
           } else if (typeof msg.paddleX === 'number') {
             lastHandY = Math.max(0, Math.min(1, msg.paddleX));
           }
+          const nowMs = performance.now();
+          if (lastHandSampleTime > 0) {
+            const dt = Math.max(1, nowMs - lastHandSampleTime);
+            const instantVel = (lastHandY - prevY) / dt;
+            handVelocityY = (handVelocityY * 0.68) + (instantVel * 0.32);
+          }
+          lastHandSampleTime = nowMs;
           handConfidence = typeof msg.confidence === 'number' ? msg.confidence : 0;
+          handMode = typeof msg.mode === 'string' ? msg.mode : handMode;
+          handOk = msg.ok !== false;
         } catch (err) {
           console.error(err);
         }
       };
       ws.onclose = () => {
-        if (thinking) {
-          setTimeout(() => vscode.postMessage({ type: 'restart-server' }), 750);
+        ws = null;
+        if (!thinking) {
+          return;
+        }
+
+        if (wsReconnectAttempts < 4 && wsPort !== null) {
+          const retryDelay = 250 + (wsReconnectAttempts * 250);
+          wsReconnectAttempts += 1;
+          wsReconnectTimer = setTimeout(() => connectSocket(wsPort, true), retryDelay);
+          return;
+        }
+
+        const now = Date.now();
+        if (now >= wsRestartCooldownUntil) {
+          wsRestartCooldownUntil = now + 5000;
+          vscode.postMessage({ type: 'restart-server' });
         }
       };
     }
@@ -298,56 +371,134 @@ class ThinkingPingPongController implements vscode.Disposable {
       state.ballY = canvas.height / 2;
       state.ballVX = 4.6 * direction;
       state.ballVY = (Math.random() * 4) - 2;
+      aiAimOffset = (Math.random() - 0.5) * 90;
     }
 
     function update() {
+      const now = performance.now();
+      const dt = Math.min(0.05, Math.max(1 / 240, (now - lastFrameTime) / 1000));
+      lastFrameTime = now;
+
       if (thinking) {
+        const leftTrackingActive =
+          handOk &&
+          handMode === 'mediapipe_left_palm_y' &&
+          handConfidence >= 0.55;
+        if (!gameStarted) {
+          trackingStableFrames = leftTrackingActive ? (trackingStableFrames + 1) : 0;
+          if (trackingStableFrames >= 6) {
+            gameStarted = true;
+            overlay.classList.add('hidden');
+            statusEl.textContent = 'Thinking';
+          } else {
+            overlay.classList.remove('hidden');
+            statusEl.textContent = 'Waiting For Left Palm';
+            overlay.textContent = 'Show LEFT palm steadily to start.';
+          }
+        }
+
         const keyboardDelta = (keyDown ? 1 : 0) - (keyUp ? 1 : 0);
         keyboardY = Math.max(0, Math.min(1, keyboardY + keyboardDelta * 0.015));
-        const sensorY = handConfidence >= 0.35 ? lastHandY : keyboardY;
-        const targetY = (canvas.height - state.paddleH) * sensorY;
-        state.leftY += (targetY - state.leftY) * 0.22;
+        const rawSensorY = handConfidence >= 0.35 ? lastHandY : keyboardY;
+        const sensorMotion = Math.abs(handVelocityY) * 1000;
+        const alpha = Math.min(
+          0.82,
+          control.sensorFilterBase + (sensorMotion * control.sensorFilterMotionBoost)
+        );
+        filteredSensorY += (rawSensorY - filteredSensorY) * alpha;
+
+        // Lead the target slightly using measured hand velocity so paddle speed matches quick hand motion.
+        const predictedSensorY = Math.max(
+          0,
+          Math.min(1, filteredSensorY + (handVelocityY * control.leadTimeMs))
+        );
+        const targetY = (canvas.height - state.paddleH) * predictedSensorY;
+        const targetVel = handVelocityY * (canvas.height - state.paddleH) * 1000;
+        const posErr = targetY - state.leftY;
+        const speedBoost = Math.min(1.0, Math.abs(handVelocityY) * 2000);
+        const springK = control.springK + (16.0 * speedBoost);
+        const velocityMatchGain = control.velocityMatchGain + (2.0 * speedBoost);
+
+        let accel =
+          (posErr * springK) +
+          ((targetVel - leftPaddleVel) * velocityMatchGain) -
+          (leftPaddleVel * control.damping);
+
+        accel = Math.max(-control.maxAccelPxPerSec2, Math.min(control.maxAccelPxPerSec2, accel));
+        leftPaddleVel += accel * dt;
+        leftPaddleVel += targetVel * control.directHandFeed * dt;
+        leftPaddleVel = Math.max(
+          -control.maxVelPxPerSec,
+          Math.min(control.maxVelPxPerSec, leftPaddleVel)
+        );
+
+        if (Math.abs(posErr) < control.deadZonePx && Math.abs(leftPaddleVel) < 12) {
+          leftPaddleVel = 0;
+        }
+
+        state.leftY += leftPaddleVel * dt;
+      } else {
+        leftPaddleVel *= 0.86;
       }
 
-      const aiCenter = state.rightY + state.paddleH / 2;
-      const chase = state.ballY - aiCenter;
-      state.rightY += Math.max(-5, Math.min(5, chase * 0.11));
-      state.rightY = Math.max(state.margin, Math.min(canvas.height - state.margin - state.paddleH, state.rightY));
+      if (gameStarted) {
+        const aiTarget = state.ballVX > 0
+          ? (state.ballY - (state.paddleH / 2) + aiAimOffset + (Math.sin(performance.now() / 240) * 5))
+          : ((canvas.height - state.paddleH) / 2) + (aiAimOffset * 0.18);
+        const aiFollow = state.ballVX > 0 ? 0.1 : 0.06;
+        const aiMaxStep = state.ballVX > 0 ? 3.9 : 2.8;
+        const aiStep = (aiTarget - state.rightY) * aiFollow;
+        state.rightY += Math.max(-aiMaxStep, Math.min(aiMaxStep, aiStep));
+        state.rightY = Math.max(state.margin, Math.min(canvas.height - state.margin - state.paddleH, state.rightY));
 
-      state.ballX += state.ballVX;
-      state.ballY += state.ballVY;
+        state.ballX += state.ballVX;
+        state.ballY += state.ballVY;
 
-      if (state.ballY < state.margin || state.ballY > canvas.height - state.margin) {
-        state.ballVY *= -1;
+        if (state.ballY < state.margin || state.ballY > canvas.height - state.margin) {
+          state.ballVY *= -1;
+        }
+
+        const leftX = state.margin;
+        const rightX = canvas.width - state.margin - state.paddleW;
+
+        if (
+          state.ballX < leftX + state.paddleW &&
+          state.ballY > state.leftY &&
+          state.ballY < state.leftY + state.paddleH &&
+          state.ballVX < 0
+        ) {
+          state.ballVX = Math.abs(state.ballVX) + 0.25;
+        }
+
+        const aiHitTop = state.rightY + 8;
+        const aiHitBottom = state.rightY + state.paddleH - 8;
+        if (
+          state.ballX > rightX &&
+          state.ballY > aiHitTop &&
+          state.ballY < aiHitBottom &&
+          state.ballVX > 0 &&
+          Math.random() > 0.03
+        ) {
+          state.ballVX = -Math.abs(state.ballVX) - 0.25;
+        }
+
+        if (state.ballX < 0) {
+          scores.right++;
+          resetBall(1);
+        } else if (state.ballX > canvas.width) {
+          scores.left++;
+          resetBall(-1);
+        }
       }
 
-      const leftX = state.margin;
-      const rightX = canvas.width - state.margin - state.paddleW;
-
-      if (
-        state.ballX < leftX + state.paddleW &&
-        state.ballY > state.leftY &&
-        state.ballY < state.leftY + state.paddleH &&
-        state.ballVX < 0
-      ) {
-        state.ballVX = Math.abs(state.ballVX) + 0.25;
-      }
-
-      if (
-        state.ballX > rightX &&
-        state.ballY > state.rightY &&
-        state.ballY < state.rightY + state.paddleH &&
-        state.ballVX > 0
-      ) {
-        state.ballVX = -Math.abs(state.ballVX) - 0.25;
-      }
-
-      if (state.ballX < 0) {
-        scores.right++;
-        resetBall(1);
-      } else if (state.ballX > canvas.width) {
-        scores.left++;
-        resetBall(-1);
+      const minY = state.margin;
+      const maxY = canvas.height - state.margin - state.paddleH;
+      if (state.leftY < minY) {
+        state.leftY = minY;
+        leftPaddleVel = 0;
+      } else if (state.leftY > maxY) {
+        state.leftY = maxY;
+        leftPaddleVel = 0;
       }
 
       state.leftY = Math.max(state.margin, Math.min(canvas.height - state.margin - state.paddleH, state.leftY));
@@ -355,7 +506,7 @@ class ThinkingPingPongController implements vscode.Disposable {
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.strokeStyle = '#3f6ba3';
+      ctx.strokeStyle = '#8c6233';
       ctx.lineWidth = 2;
       ctx.setLineDash([8, 14]);
       ctx.beginPath();
@@ -364,23 +515,23 @@ class ThinkingPingPongController implements vscode.Disposable {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      ctx.fillStyle = '#77d4ff';
+      ctx.fillStyle = '#d5a66a';
       ctx.fillRect(state.margin, state.leftY, state.paddleW, state.paddleH);
-      ctx.fillStyle = '#99e6c5';
+      ctx.fillStyle = '#9f6b3b';
       ctx.fillRect(canvas.width - state.margin - state.paddleW, state.rightY, state.paddleW, state.paddleH);
 
-      ctx.fillStyle = '#ff7f5c';
+      ctx.fillStyle = '#f2c27b';
       ctx.beginPath();
       ctx.arc(state.ballX, state.ballY, 10, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = '#f3f8ff';
+      ctx.fillStyle = '#f1dfbf';
       ctx.font = '24px Menlo, monospace';
       ctx.fillText(String(scores.left), canvas.width / 2 - 52, 42);
       ctx.fillText(String(scores.right), canvas.width / 2 + 34, 42);
 
       ctx.font = '12px Menlo, monospace';
-      ctx.fillStyle = '#8ea5c2';
+      ctx.fillStyle = '#c2a57e';
       ctx.fillText('hand confidence: ' + handConfidence.toFixed(2), 14, 24);
       if (handConfidence < 0.35) {
         ctx.fillText('fallback: keyboard (W/S or Arrow Up/Down)', 14, 42);
@@ -396,10 +547,23 @@ class ThinkingPingPongController implements vscode.Disposable {
     window.addEventListener('message', (event) => {
       const message = event.data || {};
       if (message.type === 'state') {
+        if (message.thinking) {
+          gameStarted = false;
+          trackingStableFrames = 0;
+          handMode = 'idle';
+          handOk = false;
+          handConfidence = 0;
+          resetBall(Math.random() > 0.5 ? 1 : -1);
+        }
         setThinkingUI(Boolean(message.thinking), message.reason || '');
         if (message.thinking && message.port) {
+          wsRestartCooldownUntil = 0;
           connectSocket(message.port);
         } else if (!message.thinking && ws) {
+          if (wsReconnectTimer) {
+            clearTimeout(wsReconnectTimer);
+            wsReconnectTimer = null;
+          }
           ws.close();
         }
       }
