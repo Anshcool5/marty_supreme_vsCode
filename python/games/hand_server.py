@@ -13,6 +13,10 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
+try:
+    from audio_effects import GameAudioEffects
+except ImportError:
+    from .audio_effects import GameAudioEffects
 
 try:
     import websockets
@@ -287,6 +291,7 @@ class MartySupremePong1950:
     MARGIN = 24
     PLAY_TOP = 128
     PLAY_BOTTOM_PAD = 32
+    WIN_SCORE = 3
 
     BG_TOP = (16, 46, 37)
     BG_BOTTOM = (5, 17, 12)
@@ -309,6 +314,9 @@ class MartySupremePong1950:
         self.left_score = 0
         self.right_score = 0
         self.status = "Tracking left hand..."
+        self.match_over = False
+        self.match_result = ""
+        self.audio_effects = None
 
     def _reset_ball(self, direction: int) -> None:
         self.ball_x = self.WIDTH / 2
@@ -316,7 +324,25 @@ class MartySupremePong1950:
         self.ball_vx = direction * (6.4 + random.random() * 1.9)
         self.ball_vy = random.uniform(-3.4, 3.4)
 
+    def _finish_match(self, result: str) -> None:
+        if self.match_over:
+            return
+
+        self.match_over = True
+        self.match_result = result
+        if result == "win":
+            self.status = "You won this set. Press R to play again or ESC to quit."
+            if self.audio_effects is not None:
+                self.audio_effects.play_win()
+        else:
+            self.status = "You lost this set. Press R to restart or ESC to quit."
+            if self.audio_effects is not None:
+                self.audio_effects.play_lose()
+
     def _update_logic(self) -> None:
+        if self.match_over:
+            return
+
         play_bottom = self.HEIGHT - self.PLAY_BOTTOM_PAD
         move_speed = 8.6
         gesture = self.tracker.state.mode
@@ -371,11 +397,20 @@ class MartySupremePong1950:
 
         if self.ball_x < -20:
             self.right_score += 1
-            self._reset_ball(direction=1)
+            if self.right_score >= self.WIN_SCORE:
+                self._finish_match("lose")
+            else:
+                self._reset_ball(direction=1)
 
         if self.ball_x > self.WIDTH + 20:
             self.left_score += 1
-            self._reset_ball(direction=-1)
+            if self.left_score >= self.WIN_SCORE:
+                self._finish_match("win")
+            else:
+                self._reset_ball(direction=-1)
+
+        if self.match_over:
+            return
 
         if self.tracker.state.confidence < 0.2:
             self.status = "Show LEFT hand: thumbs up/down to move, fist to hold"
@@ -424,6 +459,18 @@ class MartySupremePong1950:
         screen.blit(score_left, (self.WIDTH * 0.25, 118))
         screen.blit(score_right, (self.WIDTH * 0.75, 118))
 
+        if self.match_over:
+            banner = pygame.Rect(170, 272, self.WIDTH - 340, 110)
+            pygame.draw.rect(screen, (25, 73, 55), banner, border_radius=10)
+            pygame.draw.rect(screen, self.GOLD, banner, width=2, border_radius=10)
+            if self.match_result == "win":
+                title = small_font.render("VICTORY", True, self.IVORY)
+            else:
+                title = small_font.render("DEFEAT", True, self.IVORY)
+            subtitle = small_font.render("Press R to restart set", True, self.IVORY)
+            screen.blit(title, (banner.centerx - title.get_width() // 2, banner.y + 26))
+            screen.blit(subtitle, (banner.centerx - subtitle.get_width() // 2, banner.y + 58))
+
     def run(self) -> int:
         if not HAS_PYGAME:
             print("ERROR pygame is required for --run-pong mode.", file=sys.stderr)
@@ -444,6 +491,9 @@ class MartySupremePong1950:
             print(self.tracker.state.error, file=sys.stderr)
             return 1
 
+        self.audio_effects = GameAudioEffects()
+        self.audio_effects.play_boot()
+
         running = True
         self._reset_ball(direction=random.choice([-1, 1]))
         try:
@@ -453,6 +503,13 @@ class MartySupremePong1950:
                         running = False
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                         running = False
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_r and self.match_over:
+                        self.left_score = 0
+                        self.right_score = 0
+                        self.match_over = False
+                        self.match_result = ""
+                        self.status = "Tracking left hand..."
+                        self._reset_ball(direction=random.choice([-1, 1]))
 
                 should_continue = self.tracker.step()
                 if not should_continue:

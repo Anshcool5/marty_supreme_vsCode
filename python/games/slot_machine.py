@@ -5,7 +5,11 @@ import os
 import random
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Set
+try:
+    from audio_effects import GameAudioEffects
+except ImportError:
+    from .audio_effects import GameAudioEffects
 
 '''
 Slot Machine 1950s Vegas
@@ -93,6 +97,7 @@ class SlotMachineState:
     # Hand tracking state
     prev_fist_y: Optional[float] = None
     fist_motion_active: bool = False
+    special_mode_active: bool = False
 
 
 class BlinkDetector:
@@ -188,7 +193,7 @@ class FistMotionDetector:
             import mediapipe as mp
             self.mp_hands = mp.solutions.hands
             self.hands = self.mp_hands.Hands(
-                max_num_hands=1,
+                max_num_hands=2,
                 min_detection_confidence=0.7,
                 min_tracking_confidence=0.5
             )
@@ -198,11 +203,33 @@ class FistMotionDetector:
             self.enabled = False
             self.hands = None
 
-        self.prev_fist_y = None
-        self.motion_threshold = 0.05  # 5% of screen height (very sensitive)
+        self.prev_fist_y_by_hand: Dict[str, float] = {}
+        self.prev_fist_pos_by_hand: Dict[str, Tuple[float, float, float]] = {}
+        self.downward_streak_by_hand: Dict[str, int] = {}
+        self.motion_threshold = 0.012
+        self.pull_consecutive_frames = 2
+        self.pull_cooldown_ms = 320
         self.fist_detected_current_frame = False
         self.last_delta_y = 0.0
         self.current_y = 0.0
+        self.active_fists = 0
+        self.last_pull_ms_by_hand: Dict[str, int] = {}
+
+        # Alternating dance combo detection (both fists, forward/backward).
+        # Use Y axis for combo rhythm because webcam Z is often too flat/noisy.
+        self.dance_axis = "y"
+        self.prev_pair_axis: Optional[float] = None
+        self.dance_motion_threshold = 0.008
+        self.last_combo_ms = 0
+        self.combo_steps = 0
+        self.combo_timeout_ms = 1500
+        self.combo_required_steps = 1
+        self.combo_expected_direction = "forward"
+        self.last_dual_fists_ms = 0
+        self.dual_fist_grace_ms = 300
+        self.last_detected_pull_hand = ""
+        self.last_dance_direction = "-"
+        self.last_dance_delta = 0.0
 
     def is_fist_closed(self, hand_landmarks) -> bool:
         """Detect if hand is in closed fist position"""
@@ -221,50 +248,172 @@ class FistMotionDetector:
         # Fist if 3+ fingers are curled
         return fingers_curled >= 3
 
-    def detect_pull_motion(self, frame) -> bool:
-        """Detect downward fist motion (lever pull)"""
+    def detect_pull_motion(self, frame, now_ms: int) -> Tuple[bool, bool, bool]:
+        """
+        Detect downward fist motion (lever pull).
+
+        Returns:
+            (pull_detected, dual_fists_active, dance_combo_triggered)
+        """
         if not self.enabled or self.hands is None:
-            return False
+            return (False, False, False)
 
         self.fist_detected_current_frame = False
+        self.active_fists = 0
+        pull_detected = False
+        dance_combo_triggered = False
+        pulled_hands: List[Tuple[str, float]] = []
 
         try:
             imgRGB = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = self.hands.process(imgRGB)
 
             if not results.multi_hand_landmarks:
-                self.prev_fist_y = None
-                return False
+                self.prev_fist_y_by_hand.clear()
+                self.prev_fist_pos_by_hand.clear()
+                self.downward_streak_by_hand.clear()
+                return (False, False, False)
 
-            for hand_landmarks in results.multi_hand_landmarks:
+            active_ids: Set[str] = set()
+            fist_wrist_axis_by_hand: Dict[str, float] = {}
+            for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+                hand_id = f"idx_{idx}"
+                if results.multi_handedness and idx < len(results.multi_handedness):
+                    hand_info = results.multi_handedness[idx].classification[0]
+                    hand_id = hand_info.label.lower()
+
                 # Check if fist is closed
                 if not self.is_fist_closed(hand_landmarks):
-                    self.prev_fist_y = None
+                    self.prev_fist_y_by_hand.pop(hand_id, None)
+                    self.prev_fist_pos_by_hand.pop(hand_id, None)
+                    self.downward_streak_by_hand.pop(hand_id, None)
                     continue
 
+                active_ids.add(hand_id)
                 self.fist_detected_current_frame = True
+                self.active_fists += 1
 
                 # Get current wrist position (landmark 0)
-                self.current_y = hand_landmarks.landmark[0].y
+                current_x = hand_landmarks.landmark[0].x
+                current_y = hand_landmarks.landmark[0].y
+                wrist_z = hand_landmarks.landmark[0].z
+                dance_value = current_y if self.dance_axis == "y" else wrist_z
+                fist_wrist_axis_by_hand[hand_id] = dance_value
+                self.current_y = current_y
 
-                # Detect downward motion
-                if self.prev_fist_y is not None:
-                    self.last_delta_y = self.current_y - self.prev_fist_y
+                # Lever pull: strictly downward motion with axis dominance.
+                prev_pos = self.prev_fist_pos_by_hand.get(hand_id)
+                if prev_pos is not None:
+                    prev_x, prev_y, prev_z = prev_pos
+                    delta_y = current_y - prev_y
+                    delta_x = abs(current_x - prev_x)
+                    delta_z = abs(wrist_z - prev_z)
+                    self.last_delta_y = delta_y
 
-                    # If moved down significantly, trigger pull
-                    if self.last_delta_y > self.motion_threshold:
-                        print(f"PULL DETECTED! Delta: {self.last_delta_y:.3f} > Threshold: {self.motion_threshold}")
-                        self.prev_fist_y = None
-                        return True
+                    down_dominant = (
+                        delta_y > self.motion_threshold
+                        and delta_y > (delta_x * 1.25)
+                        and delta_y > (delta_z * 1.25)
+                    )
+
+                    if down_dominant:
+                        next_streak = self.downward_streak_by_hand.get(hand_id, 0) + 1
+                        self.downward_streak_by_hand[hand_id] = next_streak
+                    else:
+                        self.downward_streak_by_hand[hand_id] = 0
+
+                    if self.downward_streak_by_hand.get(hand_id, 0) >= self.pull_consecutive_frames:
+                        last_ms = self.last_pull_ms_by_hand.get(hand_id, -999999)
+                        if now_ms - last_ms >= self.pull_cooldown_ms:
+                            print(
+                                f"PULL DETECTED ({hand_id})! "
+                                f"Delta: {delta_y:.3f} > Threshold: {self.motion_threshold}"
+                            )
+                            pulled_hands.append((hand_id, delta_y))
+                            self.last_pull_ms_by_hand[hand_id] = now_ms
+                            self.downward_streak_by_hand[hand_id] = 0
+                            # Reset so same downward hold does not retrigger immediately.
+                            self.prev_fist_y_by_hand.pop(hand_id, None)
                 else:
                     self.last_delta_y = 0.0
+                    self.prev_fist_y_by_hand[hand_id] = current_y
+                    self.downward_streak_by_hand[hand_id] = 0
 
-                self.prev_fist_y = self.current_y
+                if hand_id in self.prev_fist_y_by_hand:
+                    self.prev_fist_y_by_hand[hand_id] = current_y
+                self.prev_fist_pos_by_hand[hand_id] = (current_x, current_y, wrist_z)
+
+            # Drop stale tracked hands no longer active as fists.
+            stale_ids = [hid for hid in self.prev_fist_y_by_hand if hid not in active_ids]
+            for hid in stale_ids:
+                self.prev_fist_y_by_hand.pop(hid, None)
+                self.prev_fist_pos_by_hand.pop(hid, None)
+                self.downward_streak_by_hand.pop(hid, None)
 
         except Exception as e:
             print(f"Fist detection error: {e}")
 
-        return False
+        dual_fists_active = self.active_fists >= 2
+
+        # Dance combo is separate from lever pull:
+        # require both fists and alternating forward/backward wrist-Z motion.
+        pair_axis: Optional[float] = None
+        if "left" in fist_wrist_axis_by_hand and "right" in fist_wrist_axis_by_hand:
+            pair_axis = (fist_wrist_axis_by_hand["left"] + fist_wrist_axis_by_hand["right"]) / 2.0
+        elif len(fist_wrist_axis_by_hand) >= 2:
+            pair_axis = float(np.mean(list(fist_wrist_axis_by_hand.values())[:2]))
+
+        if dual_fists_active and pair_axis is not None:
+            self.last_dual_fists_ms = now_ms
+            if self.prev_pair_axis is not None:
+                delta_axis = pair_axis - self.prev_pair_axis
+                self.last_dance_delta = delta_axis
+                detected_direction: Optional[str] = None
+                if delta_axis <= -self.dance_motion_threshold:
+                    detected_direction = "forward"
+                elif delta_axis >= self.dance_motion_threshold:
+                    detected_direction = "backward"
+
+                if detected_direction is not None:
+                    self.last_dance_direction = detected_direction
+                    if now_ms - self.last_combo_ms > self.combo_timeout_ms:
+                        self.combo_steps = 0
+                        self.combo_expected_direction = "forward"
+
+                    if detected_direction == self.combo_expected_direction:
+                        self.combo_steps += 1
+                    else:
+                        # Restart sequence from this motion direction.
+                        self.combo_steps = 1
+
+                    self.combo_expected_direction = (
+                        "backward" if detected_direction == "forward" else "forward"
+                    )
+                    self.last_combo_ms = now_ms
+
+                    if self.combo_steps >= self.combo_required_steps:
+                        dance_combo_triggered = True
+                        self.combo_steps = 0
+                        self.combo_expected_direction = "forward"
+                        self.last_dance_direction = "triggered"
+            self.prev_pair_axis = pair_axis
+        else:
+            if now_ms - self.last_dual_fists_ms > self.dual_fist_grace_ms:
+                self.prev_pair_axis = None
+                self.combo_steps = 0
+                self.combo_expected_direction = "forward"
+                self.last_dance_direction = "-"
+                self.last_dance_delta = 0.0
+
+        if pulled_hands:
+            # Use the strongest downward pull if both happen in same frame.
+            pull_detected = True
+            pulled_hands.sort(key=lambda item: item[1], reverse=True)
+            pulled_hand = pulled_hands[0][0]
+            self.last_detected_pull_hand = pulled_hand
+            self.last_delta_y = pulled_hands[0][1]
+
+        return (pull_detected, dual_fists_active, dance_combo_triggered)
 
 
 def generate_symbol_images() -> Dict[str, pygame.Surface]:
@@ -629,6 +778,14 @@ def draw_ui(surface: pygame.Surface, state: SlotMachineState):
     # Text
     surface.blit(mode_surface, (mode_x, mode_y))
 
+    if state.special_mode_active:
+        special_font = pygame.font.SysFont('arial', 19, bold=True)
+        special_surface = special_font.render("SPECIAL MODE: MACARENA", True, NEON_GOLD)
+        special_bg = pygame.Rect(mode_x - 90, mode_y + 34, special_surface.get_width() + 16, 30)
+        pygame.draw.rect(surface, (30, 15, 10), special_bg, border_radius=8)
+        pygame.draw.rect(surface, NEON_GOLD, special_bg, width=2, border_radius=8)
+        surface.blit(special_surface, (special_bg.x + 8, special_bg.y + 5))
+
 
 def draw_main_menu(surface: pygame.Surface) -> tuple:
     """Draw main menu for mode selection and return clickable boxes"""
@@ -737,7 +894,7 @@ def start_spin(state: SlotMachineState, now_ms: int):
         reel.current_offset = 0.0
 
 
-def update_game(state: SlotMachineState, now_ms: int):
+def update_game(state: SlotMachineState, now_ms: int, audio_effects: Optional[GameAudioEffects] = None):
     """Update game logic each frame"""
     if state.phase == GamePhase.SPINNING:
         # Update each reel
@@ -762,7 +919,7 @@ def update_game(state: SlotMachineState, now_ms: int):
 
         # Check if all stopped
         if all(r.state == ReelState.STOPPED for r in state.reels):
-            check_win(state, now_ms)
+            check_win(state, now_ms, audio_effects=audio_effects)
 
     elif state.phase == GamePhase.RESULT_DISPLAY:
         # Wait 2 seconds then return to idle
@@ -771,9 +928,10 @@ def update_game(state: SlotMachineState, now_ms: int):
             state.result_message = "Pull the lever!"
 
 
-def check_win(state: SlotMachineState, now_ms: int):
+def check_win(state: SlotMachineState, now_ms: int, audio_effects: Optional[GameAudioEffects] = None):
     """Check for winning combinations and award points/credits"""
     symbols = [reel.final_symbol for reel in state.reels]
+    is_win_result = False
 
     if state.mode == GameMode.CASUAL:
         # Casual mode: Fixed score points
@@ -782,16 +940,19 @@ def check_win(state: SlotMachineState, now_ms: int):
             state.score += 500
             state.jackpots += 1
             state.result_message = "🎰 JACKPOT! 777! +500 🎰"
+            is_win_result = True
 
         # 3 matching BARs
         elif symbols[0] == symbols[1] == symbols[2] == 'bar':
             state.score += 100
             state.result_message = "⭐ THREE BARS! +100 ⭐"
+            is_win_result = True
 
         # 3 matching fruits
         elif symbols[0] == symbols[1] == symbols[2]:
             state.score += 50
             state.result_message = f"✨ THREE {symbols[0].upper()}S! +50 ✨"
+            is_win_result = True
 
         # 2 matching
         elif (symbols[0] == symbols[1] or
@@ -799,6 +960,7 @@ def check_win(state: SlotMachineState, now_ms: int):
               symbols[0] == symbols[2]):
             state.score += 10
             state.result_message = "Two Match! +10"
+            is_win_result = True
 
         # No match
         else:
@@ -814,18 +976,21 @@ def check_win(state: SlotMachineState, now_ms: int):
             state.credits += winnings
             state.jackpots += 1
             state.result_message = f"🎰 JACKPOT! 777! +{winnings} 🎰"
+            is_win_result = True
 
         # 3 matching BARs
         elif symbols[0] == symbols[1] == symbols[2] == 'bar':
             winnings = state.bet_amount * 10
             state.credits += winnings
             state.result_message = f"⭐ THREE BARS! +{winnings} ⭐"
+            is_win_result = True
 
         # 3 matching fruits
         elif symbols[0] == symbols[1] == symbols[2]:
             winnings = state.bet_amount * 5
             state.credits += winnings
             state.result_message = f"✨ THREE {symbols[0].upper()}S! +{winnings} ✨"
+            is_win_result = True
 
         # 2 matching (return bet)
         elif (symbols[0] == symbols[1] or
@@ -834,6 +999,7 @@ def check_win(state: SlotMachineState, now_ms: int):
             winnings = state.bet_amount
             state.credits += winnings
             state.result_message = f"Two Match! Bet returned ({winnings})"
+            is_win_result = True
 
         # No match (already lost bet)
         else:
@@ -843,6 +1009,12 @@ def check_win(state: SlotMachineState, now_ms: int):
         if state.credits <= 0:
             state.game_over = True
             state.result_message = "💔 GAME OVER! Out of credits! 💔"
+
+    if audio_effects is not None:
+        if is_win_result:
+            audio_effects.play_win()
+        else:
+            audio_effects.play_lose()
 
     state.phase = GamePhase.RESULT_DISPLAY
     state.result_display_until_ms = now_ms + 2000
@@ -941,6 +1113,18 @@ def main():
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption('Slot Machine 1950s Vegas')
     clock = pygame.time.Clock()
+    audio_effects = GameAudioEffects()
+    audio_effects.play_boot()
+    special_song_path = os.path.normpath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "assets",
+            "audio_effects",
+            "music",
+            "trump_macarena.mp3",
+        )
+    )
 
     # Initialize CV
     cam = cv2.VideoCapture(0)
@@ -1092,7 +1276,24 @@ def main():
                            (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             else:
                 # Game mode - check fist pull motion
-                pull_detected = fist_detector.detect_pull_motion(frame)
+                pull_detected, dual_fists_active, dance_combo_triggered = fist_detector.detect_pull_motion(frame, now_ms)
+
+                if dance_combo_triggered and not state.special_mode_active:
+                    if os.path.exists(special_song_path):
+                        try:
+                            pygame.mixer.music.load(special_song_path)
+                            pygame.mixer.music.set_volume(0.85)
+                            pygame.mixer.music.play()
+                            state.special_mode_active = True
+                            print("SPECIAL MODE ACTIVATED: alternating dual-fist dance combo -> Macarena track started.")
+                        except pygame.error as err:
+                            print(f"Warning: failed to start special music: {err}")
+                    else:
+                        print(f"Warning: special music file missing: {special_song_path}")
+
+                # Hide special-mode badge once one-shot Macarena playback completes.
+                if state.special_mode_active and not pygame.mixer.music.get_busy():
+                    state.special_mode_active = False
 
                 if pull_detected and can_trigger_spin(state, now_ms):
                     start_spin(state, now_ms)
@@ -1115,24 +1316,53 @@ def main():
                            (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 cv2.putText(frame, "(Or press SPACEBAR)",
                            (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+                cv2.putText(frame, f"Fists active: {fist_detector.active_fists}",
+                           (10, 145), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 240, 255), 1)
+                cv2.putText(
+                    frame,
+                    f"Last pull hand: {fist_detector.last_detected_pull_hand or '-'}",
+                    (10, 172),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (220, 220, 180),
+                    1,
+                )
+                cv2.putText(
+                    frame,
+                    (
+                        f"Dance combo: {fist_detector.combo_steps}/"
+                        f"{fist_detector.combo_required_steps} "
+                        f"last={fist_detector.last_dance_direction} "
+                        f"next={fist_detector.combo_expected_direction} "
+                        f"d{fist_detector.dance_axis}={fist_detector.last_dance_delta:.3f}"
+                    ),
+                    (10, 198),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (255, 215, 0),
+                    1,
+                )
+                if state.special_mode_active:
+                    cv2.putText(frame, "SPECIAL MODE: MACARENA",
+                               (10, 224), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 215, 255), 2)
 
             if fist_detector.fist_detected_current_frame:
                 cv2.putText(frame, "FIST DETECTED!",
-                           (10, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                           (10, 255), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
                 # Show Y position and delta for debugging
                 cv2.putText(frame, f"Y: {fist_detector.current_y:.3f}",
-                           (10, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1)
+                           (10, 285), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1)
                 cv2.putText(frame, f"Delta: {fist_detector.last_delta_y:.3f}",
-                           (10, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1)
+                           (10, 312), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1)
                 cv2.putText(frame, f"Need: {fist_detector.motion_threshold:.3f}",
-                           (10, 260), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 100), 1)
+                           (10, 339), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 100), 1)
 
             cv2.imshow("Slot Machine Controls", frame)
             cv2.waitKey(1)
 
         # Update game state
-        update_game(state, now_ms)
+        update_game(state, now_ms, audio_effects=audio_effects)
 
         # Render and store menu boxes if in menu phase
         menu_boxes = render_game(screen, state, symbol_images)
