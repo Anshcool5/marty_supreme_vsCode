@@ -38,6 +38,10 @@
       {
         "command": "marty-supreme.runBlackjack",
         "title": "Marty Supreme: Run Blackjack 1940s"
+      },
+      {
+        "command": "marty-supreme.runSlotMachine",
+        "title": "Marty Supreme: Run Slot Machine 1950s"
       }
     ]
   },
