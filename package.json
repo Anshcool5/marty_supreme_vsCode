@@ -53,6 +53,10 @@
       {
         "command": "marty-supreme.runPong",
         "title": "Marty Supreme: Run Pong 1950 (Hand Tracking)"
+      },
+      {
+        "command": "marty-supreme.runSlotMachine",
+        "title": "Marty Supreme: Run Slot Machine 1950s"
       }
     ]
   },

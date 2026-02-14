@@ -4,6 +4,11 @@ import mediapipe as mp
 import os
 import random
 
+try:
+    from audio_effects import GameAudioEffects
+except ImportError:
+    from .audio_effects import GameAudioEffects
+
 '''
 Thank you "Tech With Tim" and "Murtaza's Workshop" for great free python tutorials on youtube that help me so much with this work
 Tech With Tim | Making Tetris Tutorial: https://www.youtube.com/watch?v=uoR4ilCWwKA
@@ -23,6 +28,8 @@ os.environ['SDL_VIDEO_WINDOW_POS'] ="560,30"
 pygame.font.init()
 pygame.mixer.init()
 pygame.mixer.music.load(os.path.join(os.path.dirname(__file__), 'Tetris_theme.mp3'))
+game_audio = GameAudioEffects()
+game_audio.play_boot()
 
 #Global variables
 s_width = 800
@@ -407,6 +414,9 @@ def add_score(rows):
 
 #THE MAIN FUNCTION THAT RUNS THE GAME
 def main(win):
+    if not pygame.mixer.music.get_busy():
+        pygame.mixer.music.play(-1)
+
     locked_positions = {}
     grid = create_grid(locked_positions)
 
@@ -596,10 +606,13 @@ def main(win):
 
         if lines_cleared >= WIN_LINES:
             cv2.destroyAllWindows()
+            game_audio.play_win()
             return show_end_screen(win, "YOU WON!", "Twelve lines cleared. Encore?")
 
         if check_lost(locked_positions):
             cv2.destroyAllWindows()
+            pygame.mixer.music.stop()
+            game_audio.play_lose()
             return show_end_screen(win, "YOU LOST!", "Take a bow and run it back.")
 
 #Menu screen that will lead to the main function
@@ -625,7 +638,6 @@ def main_menu(win):
                 run = False
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if start_btn.collidepoint(event.pos):
-                    pygame.mixer.music.play(-1)
                     result = main(win)
                     while result == "restart":
                         result = main(win)
