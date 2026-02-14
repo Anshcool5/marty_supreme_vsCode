@@ -30,6 +30,10 @@
       {
         "command": "marty-supreme.runExampleGame",
         "title": "Marty Supreme: Run Example Game"
+      },
+      {
+        "command": "marty-supreme.runTetris",
+        "title": "Marty Supreme: Run Tetris 1926"
       }
     ]
   },
