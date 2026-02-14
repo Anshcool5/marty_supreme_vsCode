@@ -33,6 +33,16 @@ block_size = 30
 top_left_x = (s_width - play_width) // 2
 top_left_y = s_height - play_height - 10
 
+#1920s-inspired art-deco palette
+BG_TOP = (24, 16, 10)
+BG_BOTTOM = (10, 7, 5)
+PANEL = (36, 24, 16)
+PANEL_ACCENT = (196, 154, 86)
+GRID_LINE = (92, 68, 40)
+TEXT_MAIN = (243, 219, 177)
+TEXT_SOFT = (180, 145, 100)
+WIN_LINES = 12
+
 #The shapes with all possible rotations
 S = [['.....',
       '.....',
@@ -138,7 +148,15 @@ T = [['.....',
 
 #index 0-6 get you a shape and its corresponding colours
 shapes = [S, Z, I, O, J, L, T]
-shape_colors = [(0, 230, 115), (255, 51, 51), (0, 204, 255), (255, 255, 128), (0, 102, 255), (255, 140, 26), (204, 51, 255)]
+shape_colors = [
+    (191, 126, 67),   # warm amber
+    (160, 80, 60),    # rust red
+    (81, 120, 132),   # muted teal
+    (201, 172, 101),  # brass
+    (73, 84, 119),    # navy
+    (157, 106, 54),   # copper
+    (132, 97, 136),   # violet smoke
+]
 
 #Class for the Shapes
 class Piece(object):  # *
@@ -204,10 +222,85 @@ def get_shape():
 
 #put a text in the middle of the screen
 def draw_text_middle(surface, text, size, color):
-    font = pygame.font.SysFont("britannic", size, bold=True)
+    font = pygame.font.SysFont("georgia", size, bold=True)
     label = font.render(text, 1, color)
 
     surface.blit(label, (top_left_x + play_width /2 - (label.get_width()/2), top_left_y + play_height/2 - label.get_height()/2))
+
+
+def draw_button(surface, rect, text, hovered=False):
+    fill = (68, 45, 26) if hovered else PANEL
+    pygame.draw.rect(surface, fill, rect, border_radius=8)
+    pygame.draw.rect(surface, PANEL_ACCENT, rect, 2, border_radius=8)
+    font = pygame.font.SysFont("georgia", 28, bold=True)
+    label = font.render(text, 1, TEXT_MAIN)
+    surface.blit(label, (rect.centerx - label.get_width() // 2, rect.centery - label.get_height() // 2))
+
+
+def show_end_screen(surface, title, subtitle):
+    play_again = pygame.Rect(s_width // 2 - 210, s_height // 2 + 40, 180, 56)
+    quit_btn = pygame.Rect(s_width // 2 + 30, s_height // 2 + 40, 180, 56)
+
+    while True:
+        mouse_pos = pygame.mouse.get_pos()
+        draw_deco_background(surface)
+        draw_text_middle(surface, title, 66, TEXT_MAIN)
+        draw_text_middle(surface, subtitle, 30, TEXT_SOFT)
+        draw_button(surface, play_again, "PLAY AGAIN", play_again.collidepoint(mouse_pos))
+        draw_button(surface, quit_btn, "QUIT", quit_btn.collidepoint(mouse_pos))
+        draw_scanlines(surface)
+        pygame.display.update()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return "quit"
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                return "quit"
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if play_again.collidepoint(event.pos):
+                    return "restart"
+                if quit_btn.collidepoint(event.pos):
+                    return "quit"
+
+
+def draw_deco_background(surface):
+    for y in range(s_height):
+        blend = y / float(s_height)
+        color = (
+            int(BG_TOP[0] + (BG_BOTTOM[0] - BG_TOP[0]) * blend),
+            int(BG_TOP[1] + (BG_BOTTOM[1] - BG_TOP[1]) * blend),
+            int(BG_TOP[2] + (BG_BOTTOM[2] - BG_TOP[2]) * blend),
+        )
+        pygame.draw.line(surface, color, (0, y), (s_width, y))
+
+    # light vignette around playfield
+    glow = pygame.Surface((play_width + 80, play_height + 80), pygame.SRCALPHA)
+    pygame.draw.rect(glow, (223, 180, 104, 34), (0, 0, play_width + 80, play_height + 80), border_radius=18)
+    surface.blit(glow, (top_left_x - 40, top_left_y - 40))
+
+
+def draw_scanlines(surface):
+    overlay = pygame.Surface((s_width, s_height), pygame.SRCALPHA)
+    for y in range(0, s_height, 4):
+        pygame.draw.line(overlay, (0, 0, 0, 24), (0, y), (s_width, y))
+    surface.blit(overlay, (0, 0))
+
+
+def draw_deco_frame(surface):
+    frame_rect = (top_left_x - 14, top_left_y - 14, play_width + 28, play_height + 28)
+    pygame.draw.rect(surface, PANEL_ACCENT, frame_rect, 4, border_radius=4)
+    pygame.draw.rect(surface, GRID_LINE, (top_left_x, top_left_y, play_width, play_height), 2)
+
+    # art-deco corner ticks
+    corner = 20
+    pygame.draw.line(surface, PANEL_ACCENT, (top_left_x - 14, top_left_y - 14), (top_left_x + corner, top_left_y - 14), 2)
+    pygame.draw.line(surface, PANEL_ACCENT, (top_left_x - 14, top_left_y - 14), (top_left_x - 14, top_left_y + corner), 2)
+    pygame.draw.line(surface, PANEL_ACCENT, (top_left_x + play_width + 14, top_left_y - 14), (top_left_x + play_width - corner, top_left_y - 14), 2)
+    pygame.draw.line(surface, PANEL_ACCENT, (top_left_x + play_width + 14, top_left_y - 14), (top_left_x + play_width + 14, top_left_y + corner), 2)
+    pygame.draw.line(surface, PANEL_ACCENT, (top_left_x - 14, top_left_y + play_height + 14), (top_left_x + corner, top_left_y + play_height + 14), 2)
+    pygame.draw.line(surface, PANEL_ACCENT, (top_left_x - 14, top_left_y + play_height + 14), (top_left_x - 14, top_left_y + play_height - corner), 2)
+    pygame.draw.line(surface, PANEL_ACCENT, (top_left_x + play_width + 14, top_left_y + play_height + 14), (top_left_x + play_width - corner, top_left_y + play_height + 14), 2)
+    pygame.draw.line(surface, PANEL_ACCENT, (top_left_x + play_width + 14, top_left_y + play_height + 14), (top_left_x + play_width + 14, top_left_y + play_height - corner), 2)
 
 #draw the lines onto the grid
 def draw_grid(surface, grid):
@@ -215,9 +308,9 @@ def draw_grid(surface, grid):
     sy = top_left_y
 
     for i in range(len(grid)):
-        pygame.draw.line(surface, (128,128,128), (sx, sy + i*block_size), (sx+play_width, sy+ i*block_size))
+        pygame.draw.line(surface, GRID_LINE, (sx, sy + i*block_size), (sx+play_width, sy+ i*block_size))
         for j in range(len(grid[i])):
-            pygame.draw.line(surface, (128, 128, 128), (sx + j*block_size, sy),(sx + j*block_size, sy + play_height))
+            pygame.draw.line(surface, GRID_LINE, (sx + j*block_size, sy),(sx + j*block_size, sy + play_height))
 
 #clear a row
 def clear_rows(grid, locked):
@@ -245,47 +338,60 @@ def clear_rows(grid, locked):
 
 #draw the window that shows the next shape
 def draw_next_shape(shape, surface):
-    font = pygame.font.SysFont('britannic', 30)
-    label = font.render('Next Shape', 1, (255,255,255))
+    font = pygame.font.SysFont('georgia', 28, bold=True)
+    label = font.render('NEXT', 1, TEXT_MAIN)
 
     sx = top_left_x + play_width + 50
     sy = top_left_y + play_height/2 - 100
     format = shape.shape[shape.rotation % len(shape.shape)]
 
+    pygame.draw.rect(surface, PANEL, (sx - 16, sy - 50, 170, 220), border_radius=8)
+    pygame.draw.rect(surface, PANEL_ACCENT, (sx - 16, sy - 50, 170, 220), 2, border_radius=8)
+
     for i, line in enumerate(format):
         row = list(line)
         for j, column in enumerate(row):
             if column == '0':
-                pygame.draw.rect(surface, shape.color, (sx + j*block_size, sy + i*block_size, block_size, block_size), 0)
+                x = sx + j*block_size
+                y = sy + i*block_size
+                pygame.draw.rect(surface, shape.color, (x, y, block_size, block_size), 0, border_radius=4)
+                pygame.draw.rect(surface, (248, 228, 190), (x + 4, y + 4, block_size - 8, block_size - 8), 1, border_radius=3)
 
-    surface.blit(label, (sx + 10, sy - 40))
+    surface.blit(label, (sx + 32, sy - 40))
 
 #draw the main window
 def draw_window(surface, grid, score=0):
-    surface.fill((0, 0, 0))
+    draw_deco_background(surface)
 
     pygame.font.init()
-    font = pygame.font.SysFont('britannic', 60)
-    label = font.render('TETRIS', 1, (255, 255, 255))
+    font = pygame.font.SysFont('georgia', 56, bold=True)
+    label = font.render('TETRIS 1926', 1, TEXT_MAIN)
 
     surface.blit(label, (top_left_x + play_width / 2 - (label.get_width() / 2), 15))
 
     #show current score
-    font = pygame.font.SysFont('britannic', 30)
-    label = font.render('Score: ' + str(score), 1, (255,255,255))
+    font = pygame.font.SysFont('georgia', 28, bold=True)
+    label = font.render('SCORE: ' + str(score), 1, TEXT_SOFT)
 
     sx = top_left_x + play_width + 50
     sy = top_left_y + play_height/2 - 100
 
-    surface.blit(label, (sx + 20, sy + 160))
+    pygame.draw.rect(surface, PANEL, (sx - 16, sy + 110, 170, 60), border_radius=8)
+    pygame.draw.rect(surface, PANEL_ACCENT, (sx - 16, sy + 110, 170, 60), 2, border_radius=8)
+    surface.blit(label, (sx + 4, sy + 125))
 
     for i in range(len(grid)):
         for j in range(len(grid[i])):
-            pygame.draw.rect(surface, grid[i][j], (top_left_x + j*block_size, top_left_y + i*block_size, block_size, block_size), 0)
+            color = grid[i][j]
+            x = top_left_x + j*block_size
+            y = top_left_y + i*block_size
+            pygame.draw.rect(surface, color, (x, y, block_size, block_size), 0, border_radius=4)
+            if color != (0, 0, 0):
+                pygame.draw.rect(surface, (248, 228, 190), (x + 4, y + 4, block_size - 8, block_size - 8), 1, border_radius=3)
 
-    pygame.draw.rect(surface, (215, 215, 215), (top_left_x, top_left_y, play_width, play_height), 5)
-
+    draw_deco_frame(surface)
     draw_grid(surface, grid)
+    draw_scanlines(surface)
 
 #add scores that correspond to the amount of rows cleared
 def add_score(rows):
@@ -304,7 +410,6 @@ def main(win):
     grid = create_grid(locked_positions)
 
     change_piece = False
-    run = True
     current_piece = get_shape()
     next_piece = get_shape()
     clock = pygame.time.Clock()
@@ -319,21 +424,45 @@ def main(win):
     rotate_wait = 0
     down_wait = 0
     fall_speed_down = 0.1
+    lines_cleared = 0
+
+    # Cooldowns smooth gesture inputs and reduce jitter / repeated accidental moves.
+    move_cooldown = 0
+    rotate_cooldown = 0
+    drop_cooldown = 0
 
     #THE MAIN WHILE LOOP
-    while run:
+    while True:
         grid = create_grid(locked_positions)
 
         fall_time += clock.get_rawtime()
         level_time += clock.get_rawtime()
         clock.tick()
 
+        if move_cooldown > 0:
+            move_cooldown -= 1
+        if rotate_cooldown > 0:
+            rotate_cooldown -= 1
+        if drop_cooldown > 0:
+            drop_cooldown -= 1
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                cv2.destroyAllWindows()
+                return "quit"
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                cv2.destroyAllWindows()
+                return "quit"
+
         #Set up the hand tracker
         success, img = cam.read()
+        if not success:
+            continue
         imgg = cv2.flip(img, 1)
         imgRGB = cv2.cvtColor(imgg, cv2.COLOR_BGR2RGB)
         results = hands.process(imgRGB)
 
+        gesture_detected = False
         if results.multi_hand_landmarks:
             for handLms in results.multi_hand_landmarks:
                 for id, lm in enumerate(handLms.landmark):
@@ -346,18 +475,37 @@ def main(win):
 
                     #This will track the hand gestures
                     if len(y) > 20:
-                        if (x[0] > x[3] > x[4]) and not(y[20] > y[17]):
-                           left_wait += 1
-                        if not(x[0] > x[3] > x[4]) and (y[20] > y[17]):
+                        left_pose = (x[0] > x[3] > x[4]) and not(y[20] > y[17])
+                        right_pose = not(x[0] > x[3] > x[4]) and (y[20] > y[17])
+                        rotate_pose = (x[0] > x[3] > x[4]) and (y[20] > y[17])
+
+                        if left_pose:
+                            left_wait += 1
+                            right_wait = 0
+                            rotate_wait = 0
+                            down_wait = 0
+                            gesture_detected = True
+                        elif right_pose:
                             right_wait += 1
-                        if (x[0] > x[3] > x[4]) and (y[20] > y[17]):
+                            left_wait = 0
+                            rotate_wait = 0
+                            down_wait = 0
+                            gesture_detected = True
+                        elif rotate_pose:
                             rotate_wait += 1
+                            left_wait = 0
+                            right_wait = 0
+                            down_wait = 0
+                            gesture_detected = True
 
 
                 mpDraw.draw_landmarks(imgg, handLms, mpHands.HAND_CONNECTIONS)
 
-        else:
+        if not gesture_detected:
             down_wait += 1
+            left_wait = 0
+            right_wait = 0
+            rotate_wait = 0
 
         cv2.namedWindow("WebCam")
         cv2.moveWindow("WebCam", 20, 121)
@@ -379,38 +527,42 @@ def main(win):
                 change_piece = True
 
         #"if you gesture to the LEFT for at least 4 frames, piece move LEFT"
-        if left_wait >= 4:
+        if left_wait >= 3 and move_cooldown == 0:
             current_piece.x -= 1
             if not (valid_space(current_piece, grid)):
                 current_piece.x += 1
+            move_cooldown = 4
             left_wait = 0
             right_wait = 0
             rotate_wait = 0
             down_wait = 0
 
         #"if you gesture to the RIGHT for at least 4 frames, piece move RIGHT"
-        if right_wait >= 4:
+        if right_wait >= 3 and move_cooldown == 0:
             current_piece.x += 1
             if not (valid_space(current_piece, grid)):
                 current_piece.x -= 1
+            move_cooldown = 4
             left_wait = 0
             right_wait = 0
             rotate_wait = 0
             down_wait = 0
 
         #"if you gesture to ROTATE  for at least 4 frames, piece ROTATES"
-        if rotate_wait >= 4:
+        if rotate_wait >= 3 and rotate_cooldown == 0:
             current_piece.rotation += 1
             if not (valid_space(current_piece, grid)):
                 current_piece.rotation -= 1
+            rotate_cooldown = 8
             left_wait = 0
             right_wait = 0
             rotate_wait = 0
             down_wait = 0
 
         #"if you gesture to go DOWN (no hand on the screen) for at least 5 frames, piece go DOWN (moves very fast)"
-        if down_wait >= 5:
+        if down_wait >= 5 and drop_cooldown == 0:
             fall_speed = fall_speed_down
+            drop_cooldown = 10
             left_wait = 0
             right_wait = 0
             rotate_wait = 0
@@ -431,7 +583,9 @@ def main(win):
             current_piece = next_piece
             next_piece = get_shape()
             change_piece = False
-            score += add_score(clear_rows(grid, locked_positions))
+            cleared = clear_rows(grid, locked_positions)
+            lines_cleared += cleared
+            score += add_score(cleared)
             fall_speed = fall_speed_real
             down_wait = 0
 
@@ -439,28 +593,49 @@ def main(win):
         draw_next_shape(next_piece, win)
         pygame.display.update()
 
+        if lines_cleared >= WIN_LINES:
+            cv2.destroyAllWindows()
+            return show_end_screen(win, "YOU WON!", "Twelve lines cleared. Encore?")
+
         if check_lost(locked_positions):
-            draw_text_middle(win, "YOU LOST!", 80, (255,255,255))
-            pygame.display.update()
-            pygame.time.delay(1500)
-            run = False
+            cv2.destroyAllWindows()
+            return show_end_screen(win, "YOU LOST!", "Take a bow and run it back.")
 
 #Menu screen that will lead to the main function
 def main_menu(win):
     run = True
+    start_btn = pygame.Rect(s_width // 2 - 210, s_height // 2 + 40, 180, 56)
+    quit_btn = pygame.Rect(s_width // 2 + 30, s_height // 2 + 40, 180, 56)
+
     while run:
-        win.fill((0,0,0))
-        draw_text_middle(win, 'Press Any Key To Start', 60, (255,255,255))
+        mouse_pos = pygame.mouse.get_pos()
+        draw_deco_background(win)
+        draw_text_middle(win, 'TETRIS 1926', 74, TEXT_MAIN)
+        draw_text_middle(win, 'HAND-GESTURE EDITION', 30, TEXT_SOFT)
+        draw_button(win, start_btn, "START", start_btn.collidepoint(mouse_pos))
+        draw_button(win, quit_btn, "QUIT", quit_btn.collidepoint(mouse_pos))
+        draw_scanlines(win)
         pygame.display.update()
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 run = False
-            if event.type == pygame.KEYDOWN:
-                pygame.mixer.music.play()
-                main(win)
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                run = False
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if start_btn.collidepoint(event.pos):
+                    pygame.mixer.music.play(-1)
+                    result = main(win)
+                    while result == "restart":
+                        result = main(win)
+                    if result == "quit":
+                        run = False
+                if quit_btn.collidepoint(event.pos):
+                    run = False
 
+    cv2.destroyAllWindows()
     pygame.display.quit()
 
 win = pygame.display.set_mode((s_width, s_height))
-pygame.display.set_caption('TETRIS')
+pygame.display.set_caption('TETRIS 1926')
 main_menu(win)
